@@ -11,8 +11,8 @@ pacman::p_load(data.table,
                ggplot2)
 
 # 1. Lade beide Scripts
-source("triple_barrier_labeling.R")
-source("alternative_labeling_methods.R")
+source("r/01_triple_barrier_labelling.R")
+source("r/01_alternative_labeling_methods.R")
 
 # 2. Starte mit Triple Barrier
 labeled_gold <- create_triple_barrier_labels(
