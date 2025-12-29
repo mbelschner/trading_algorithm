@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(del \"01_triple_barrier_labeling_optimized.R\" \"performance_test.R\" \"PERFORMANCE_OPTIMIZATIONS.md\")",
+      "Bash(ls:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(Rscript:*)"
+    ]
+  }
+}
