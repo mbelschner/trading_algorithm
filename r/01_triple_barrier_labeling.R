@@ -17,6 +17,11 @@ library(data.table)
 library(TTR)
 library(ggplot2)
 
+# Check if progress package is available, if not use simple text progress
+if(!requireNamespace("progress", quietly = TRUE)) {
+  message("Consider installing 'progress' package for better progress bars: install.packages('progress')")
+}
+
 # =============================================================================
 # HAUPTFUNKTION: TRIPLE BARRIER LABELING
 # =============================================================================
@@ -124,18 +129,32 @@ create_triple_barrier_labels <- function(
   )
   
   cat("Labeling", length(valid_indices), "gültige Observations...\n")
-  
+
   # Progress tracking
   n_total <- length(valid_indices)
-  progress_step <- max(1, floor(n_total / 10))
-  
+
+  # Initialize progress bar (if available, otherwise use simple text)
+  if(requireNamespace("progress", quietly = TRUE)) {
+    pb <- progress::progress_bar$new(
+      format = "  [:bar] :percent | :current/:total | ETA: :eta | Elapsed: :elapsed",
+      total = n_total,
+      clear = FALSE,
+      width = 80
+    )
+  } else {
+    pb <- NULL
+    progress_step <- max(1, floor(n_total / 10))
+  }
+
   for(idx in seq_along(valid_indices)) {
-    
+
     i <- valid_indices[idx]
-    
+
     # Progress
-    if(idx %% progress_step == 0) {
-      cat(sprintf("  Progress: %d%% (%d/%d)\n", 
+    if(!is.null(pb)) {
+      pb$tick()
+    } else if(idx %% progress_step == 0) {
+      cat(sprintf("  Progress: %d%% (%d/%d)\n",
                   round(idx/n_total*100), idx, n_total))
     }
     
@@ -357,6 +376,164 @@ analyze_label_quality <- function(labeled_data) {
 
 
 # =============================================================================
+# SAMPLE WEIGHTS: ÜBERLAPPENDE LABELS
+# =============================================================================
+
+calculate_sample_weights <- function(labeled_data) {
+
+  cat("\n=== BERECHNE SAMPLE WEIGHTS ===\n")
+
+  dt <- copy(labeled_data)
+
+  # Berechne Entry und Exit Zeiten (bars_to_exit * 15 Minuten)
+  dt[, entry_time := datetime]
+  dt[, exit_time := datetime + bars_to_exit * 15 * 60]
+
+  cat("Berechne überlappende Labels...\n")
+
+  # Für jede Zeile: Zähle wie viele andere Labels gleichzeitig aktiv sind
+  dt[, n_concurrent := {
+    sapply(1:.N, function(i) {
+      sum(entry_time[i] <= exit_time & exit_time[i] >= entry_time)
+    })
+  }]
+
+  # Sample Weight = 1 / Anzahl überlappender Labels
+  dt[, sample_weight := 1.0 / n_concurrent]
+
+  cat("Sample Weights berechnet.\n")
+
+  return(dt)
+}
+
+
+analyze_sample_weights <- function(labeled_data) {
+
+  cat("\n=== SAMPLE WEIGHTS ANALYSE ===\n")
+
+  dt <- copy(labeled_data)
+
+  cat("\n1. CONCURRENT LABELS STATISTIK:\n")
+  cat(sprintf("   Durchschnittliche Anzahl überlappender Labels: %.2f\n",
+              mean(dt$n_concurrent)))
+  cat(sprintf("   Median überlappende Labels: %.0f\n",
+              median(dt$n_concurrent)))
+  cat(sprintf("   Max überlappende Labels: %.0f\n",
+              max(dt$n_concurrent)))
+  cat(sprintf("   Min überlappende Labels: %.0f\n",
+              min(dt$n_concurrent)))
+
+  cat("\n2. SAMPLE WEIGHTS STATISTIK:\n")
+  cat(sprintf("   Durchschnittliches Sample Weight: %.4f\n",
+              mean(dt$sample_weight)))
+  cat(sprintf("   Median Sample Weight: %.4f\n",
+              median(dt$sample_weight)))
+  cat(sprintf("   Min Sample Weight: %.4f\n",
+              min(dt$sample_weight)))
+  cat(sprintf("   Max Sample Weight: %.4f\n",
+              max(dt$sample_weight)))
+
+  cat("\n3. VERTEILUNG DER CONCURRENT LABELS:\n")
+  concurrent_table <- table(dt$n_concurrent)
+  concurrent_df <- data.frame(
+    n_concurrent = as.numeric(names(concurrent_table)),
+    count = as.numeric(concurrent_table),
+    pct = round(as.numeric(concurrent_table) / sum(concurrent_table) * 100, 1)
+  )
+  print(head(concurrent_df, 10))
+
+  cat("\n4. EFFECTIVE SAMPLE SIZE:\n")
+  effective_n <- sum(dt$sample_weight)
+  cat(sprintf("   Original Samples: %d\n", nrow(dt)))
+  cat(sprintf("   Effective Samples (gewichtet): %.1f\n", effective_n))
+  cat(sprintf("   Reduktion: %.1f%%\n",
+              (1 - effective_n/nrow(dt)) * 100))
+
+  cat("\n5. WEIGHTS PRO LABEL:\n")
+  weight_by_label <- dt[, .(
+    count = .N,
+    mean_weight = round(mean(sample_weight), 4),
+    median_weight = round(median(sample_weight), 4),
+    sum_weight = round(sum(sample_weight), 1),
+    effective_pct = round(sum(sample_weight) / sum(dt$sample_weight) * 100, 1)
+  ), by = label]
+  print(weight_by_label)
+
+  return(invisible(NULL))
+}
+
+
+plot_sample_weights <- function(labeled_data) {
+
+  dt <- copy(labeled_data)
+  dt[, hour := hour(datetime)]
+  dt[, label_factor := factor(label, levels = c(-1, 0, 1),
+                              labels = c("Short (-1)", "Neutral (0)", "Long (+1)"))]
+
+  # Plot 1: Verteilung der Concurrent Labels
+  p1 <- ggplot(dt, aes(x = n_concurrent)) +
+    geom_histogram(binwidth = 1, fill = "#3498DB", color = "white") +
+    labs(title = "Verteilung der überlappenden Labels",
+         subtitle = "Wie viele Labels sind gleichzeitig aktiv?",
+         x = "Anzahl überlappender Labels",
+         y = "Häufigkeit") +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold"))
+
+  # Plot 2: Sample Weights Verteilung
+  p2 <- ggplot(dt, aes(x = sample_weight)) +
+    geom_histogram(bins = 50, fill = "#E74C3C", color = "white") +
+    labs(title = "Verteilung der Sample Weights",
+         subtitle = "Weight = 1 / Anzahl überlappender Labels",
+         x = "Sample Weight",
+         y = "Häufigkeit") +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold"))
+
+  # Plot 3: Concurrent Labels über Zeit
+  hourly_concurrent <- dt[, .(
+    mean_concurrent = mean(n_concurrent),
+    median_concurrent = median(n_concurrent)
+  ), by = hour]
+
+  p3 <- ggplot(hourly_concurrent, aes(x = hour)) +
+    geom_line(aes(y = mean_concurrent, color = "Durchschnitt"), size = 1) +
+    geom_line(aes(y = median_concurrent, color = "Median"), size = 1) +
+    scale_color_manual(values = c("Durchschnitt" = "#3498DB", "Median" = "#E67E22")) +
+    labs(title = "Überlappende Labels nach Tageszeit",
+         x = "Stunde",
+         y = "Anzahl überlappender Labels",
+         color = "") +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold"),
+          legend.position = "bottom")
+
+  # Plot 4: Sample Weights pro Label
+  p4 <- ggplot(dt, aes(x = label_factor, y = sample_weight, fill = label_factor)) +
+    geom_boxplot(alpha = 0.7) +
+    scale_fill_manual(values = c("Short (-1)" = "#E74C3C",
+                                  "Neutral (0)" = "#95A5A6",
+                                  "Long (+1)" = "#27AE60")) +
+    labs(title = "Sample Weights pro Label",
+         x = "Label",
+         y = "Sample Weight") +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold"),
+          legend.position = "none")
+
+  # Kombiniere Plots
+  if(requireNamespace("gridExtra", quietly = TRUE)) {
+    gridExtra::grid.arrange(p1, p2, p3, p4, ncol = 2)
+  } else {
+    print(p1)
+    print(p2)
+    print(p3)
+    print(p4)
+  }
+}
+
+
+# =============================================================================
 # VISUALISIERUNG
 # =============================================================================
 
@@ -533,7 +710,11 @@ cat("Verfügbare Funktionen:\n")
 cat("  - create_triple_barrier_labels(prices, ...)\n")
 cat("  - analyze_label_quality(labeled_data)\n")
 cat("  - plot_label_distribution(labeled_data)\n")
+cat("  - calculate_sample_weights(labeled_data)\n")
+cat("  - analyze_sample_weights(labeled_data)\n")
+cat("  - plot_sample_weights(labeled_data)\n")
 cat("  - optimize_labeling_parameters(prices, ...)\n")
 cat("\nBeispiel:\n")
 cat("  labeled <- create_triple_barrier_labels(gold_15min)\n")
-cat("  analyze_label_quality(labeled)\n")
+cat("  labeled_weighted <- calculate_sample_weights(labeled)\n")
+cat("  analyze_sample_weights(labeled_weighted)\n")
