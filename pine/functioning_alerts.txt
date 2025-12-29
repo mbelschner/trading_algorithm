@@ -1,0 +1,120 @@
+// =============================================================================
+// SEKTION 4: TRADE MANAGEMENT (HYBRID-MODELL)
+// =============================================================================
+var float position_sl = na
+var float position_tp1 = na
+var float position_tp2 = na
+var bool tp1_was_hit = false
+var float entry_price = na
+
+// --- Alert-Trigger-Variablen ---
+var bool alert_long_entry_fired = false
+var bool alert_short_entry_fired = false
+var bool alert_tp1_long_fired = false
+var bool alert_tp1_short_fired = false
+var bool alert_time_exit_fired = false
+var bool alert_final_exit_fired = false
+
+barHour = tz == "Exchange" ? hour : hour(time, tz)
+barMinute = tz == "Exchange" ? minute : minute(time, tz)
+isTimeForExit = useTimeExit and (barHour > exitHour or (barHour == exitHour and barMinute >= exitMinute))
+
+// --- KORRIGIERTE Logik für Final Exit Alert & Reset ---
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    // Ein Trade wurde gerade vollständig geschlossen.
+    if not alert_time_exit_fired and not alert_tp1_long_fired and not alert_tp1_short_fired
+        // Wenn es KEIN Time-Exit und KEIN TP1 war, muss es ein finaler Exit sein.
+        alert_final_exit_fired := true
+
+    // Reset für den nächsten Trade
+    tp1_was_hit := false
+
+
+if (enter_long and strategy.position_size == 0 and not isTimeForExit)
+    spread_cost = spread_points * syminfo.mintick
+    sl_offset = atr_val * sl_atr_multiplier + spread_cost
+    tp1_offset = atr_val * tp1_atr_multiplier + spread_cost
+    tp2_offset = atr_val * tp2_atr_multiplier + spread_cost
+    position_sl := close - sl_offset
+    position_tp1 := close + tp1_offset
+    position_tp2 := close + tp2_offset
+    entry_price := close
+    strategy.entry("Long", strategy.long)
+    strategy.exit("SL", from_entry="Long", stop=position_sl)
+    alert_long_entry_fired := true 
+
+if (enter_short and strategy.position_size == 0 and not isTimeForExit)
+    spread_cost = spread_points * syminfo.mintick
+    sl_offset = atr_val * sl_atr_multiplier + spread_cost
+    tp1_offset = atr_val * tp1_atr_multiplier + spread_cost
+    tp2_offset = atr_val * tp2_atr_multiplier + spread_cost
+    position_sl := close + sl_offset
+    position_tp1 := close - tp1_offset
+    position_tp2 := close - tp2_offset
+    entry_price := close
+    strategy.entry("Short", strategy.short)
+    strategy.exit("SL", from_entry="Short", stop=position_sl)
+    alert_short_entry_fired := true 
+
+if strategy.position_size != 0
+    if isTimeForExit
+        if strategy.position_size != 0 // Nur auslösen, wenn noch etwas offen ist
+            strategy.close_all(comment="Time Exit")
+            alert_time_exit_fired := true 
+    
+    if strategy.position_size > 0 and not tp1_was_hit
+        if high >= position_tp1
+            strategy.close("Long", qty_percent=50, comment="TP1 Hit 50%")
+            tp1_was_hit := true
+            strategy.cancel("SL")
+            strategy.exit("BE/TP2", from_entry="Long", stop=entry_price, limit=position_tp2)
+            alert_tp1_long_fired := true 
+
+    if strategy.position_size < 0 and not tp1_was_hit
+        if low <= position_tp1
+            strategy.close("Short", qty_percent=50, comment="TP1 Hit 50%")
+            tp1_was_hit := true
+            strategy.cancel("SL")
+            strategy.exit("BE/TP2", from_entry="Short", stop=entry_price, limit=position_tp2)
+            alert_tp1_short_fired := true
+
+
+
+// =============================================================================
+// SEKTION 6: ALERTS
+// =============================================================================
+if alert_long_entry_fired
+    alert('{"symbol":"' + syminfo.ticker + '","action":"buy","intent":"open","reason":"enter_long","stop_loss":' + str.tostring(position_sl) + '}', alert.freq_once_per_bar)
+    alert_long_entry_fired := false
+if alert_short_entry_fired
+    alert('{"symbol":"' + syminfo.ticker + '","action":"sell","intent":"open","reason":"enter_short","stop_loss":' + str.tostring(position_sl) + '}', alert.freq_once_per_bar)
+    alert_short_entry_fired := false
+
+if alert_tp1_long_fired
+    alert('{"symbol":"' + syminfo.ticker + '","action":"sell","intent":"close_partial","reason":"tp1_hit","size":"0.5"}', alert.freq_once_per_bar)
+    alert_tp1_long_fired := false
+if alert_tp1_short_fired
+    alert('{"symbol":"' + syminfo.ticker + '","action":"buy","intent":"close_partial","reason":"tp1_hit","size":"0.5"}', alert.freq_once_per_bar)
+    alert_tp1_short_fired := false
+
+if alert_time_exit_fired
+    side = strategy.position_size[1] > 0 ? "sell" : "buy"
+    alert('{"symbol":"' + syminfo.ticker + '","action":"' + side + '","intent":"close","reason":"time_exit","size":"all"}', alert.freq_once_per_bar)
+    alert_time_exit_fired := false
+
+if alert_final_exit_fired
+    last_profit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    was_long = strategy.closedtrades.size(strategy.closedtrades - 1) > 0
+
+    reason = ""
+    if not tp1_was_hit[1] 
+        reason := "stop_loss_full"
+    else
+        if last_profit > 0
+            reason := "tp2_hit"
+        else
+            reason := "stop_loss_be"
+            
+    side = was_long ? "sell" : "buy"
+    alert('{"symbol":"' + syminfo.ticker + '","action":"' + side + '","intent":"close","reason":"' + reason + '","size":"all"}', alert.freq_once_per_bar)
+    alert_final_exit_fired := false

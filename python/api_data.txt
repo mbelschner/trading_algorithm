@@ -1,0 +1,7 @@
+Name, capital_api_key
+Key, DuE36KIScUGYppuG
+Password, CMalinese26Maxi!
+
+Name, demo_key
+Key, TJPB1jNrf1mbl3hU
+Password, API_Demo222555
