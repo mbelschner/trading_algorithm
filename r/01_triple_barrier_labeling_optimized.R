@@ -28,7 +28,7 @@ create_triple_barrier_labels <- function(
     session_end = 20,
     min_atr = 0.0001,
     vertical_label_mode = "sign",
-    neutral_threshold = 0.1
+    neutral_threshold = 0.3
 ) {
 
   cat("=== TRIPLE BARRIER LABELING (OPTIMIZED) ===\n")

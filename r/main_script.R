@@ -1,5 +1,7 @@
 #Script for running labelling methods
 
+cat("\n=== START LABEL ANALYSIS ===\n")
+
 # ===== Set Up =================================================================
 
 rm(list=ls())
@@ -49,7 +51,7 @@ labeled <- create_triple_barrier_labels(
   atr_period = 10,
   atr_mult_barrier = 1.5,
   max_horizon_bars = 8,
-  session_start = 4,
+  session_start = 2,
   session_end = 21,
   neutral_threshold = 0.3    # 10% des ATR als Neutral-Schwelle
 )
@@ -81,17 +83,17 @@ horizon_test_results <- test_horizon_impact(
   atr_period = 14,
   atr_mult_barrier = 3,
   horizons = c(7, 10, 14, 17, 20),
-  session_start = 4,
+  session_start = 2,
   session_end = 21
 )
 print(horizon_test_results)
 
 # 7. Optimiere Label Parameter (umfassender Grid Search)
 opt_params <- optimize_labeling_parameters(
-   prices = dt_small,
-   atr_periods = c(10, 14, 20),
+   prices = dt,
+   atr_periods = c(10, 12, 14, 20),
    atr_mults = c(1.5, 2, 2.5, 3),
-   max_horizons = c(8, 11, 14, 17),
+   max_horizons = c(8, 11, 14),
    sort_by = "combined"  # Sortierung: "uniqueness" (default), "balance", oder "combined"
 )
 
@@ -108,3 +110,31 @@ cat(sprintf("\nUniqueness: %.4f (höher = besser)\n", best$avg_uniqueness))
 cat(sprintf("Balance Score: %.3f (niedriger = besser)\n", best$balance_score))
 cat(sprintf("Mean Concurrent Labels: %.1f\n", best$mean_concurrent))
 cat(sprintf("Samples: %d\n", best$n_samples))
+
+# ====== Erstelle Labels mit den besten Parametern =============================
+cat("\n=== ERSTELLE LABELS MIT BESTEN PARAMETERN ===\n")
+
+# Erstelle Labels mit den besten Parametern
+labeled_optimized <- create_triple_barrier_labels(
+  prices = dt,
+  atr_period = best$atr_period,
+  atr_mult_barrier = best$atr_mult,
+  max_horizon_bars = best$max_horizon,
+  session_start = 2,
+  session_end = 21,
+  neutral_threshold = 0.3    # 10% des ATR als Neutral-Schwelle
+)
+
+# Prüfe Label-Qualität
+analyze_label_quality(labeled_optimized)
+
+# Berechne Sample Weights (überlappende Labels)
+labeled_weighted <- calculate_sample_weights(labeled_optimized)
+analyze_sample_weights(labeled_weighted)
+
+# Speichere die gelabelten Daten
+output_filename = file.path(labelled_output_path, paste0(EPIC, "_", INTERVAL, "_labeled.csv"))
+fwrite(labeled_weighted, output_filename)
+#View(labeled_weighted)
+cat(sprintf("\nGelabelte Daten gespeichert in: %s\n", output_filename))
+cat("\n=== END LABEL ANALYSIS ===\n")
