@@ -5,7 +5,9 @@
       "Bash(ls:*)",
       "Bash(dir:*)",
       "Bash(findstr:*)",
-      "Bash(Rscript:*)"
+      "Bash(Rscript:*)",
+      "Bash(del \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\r\\\\03_integrated_triple_barrier_metalabeling.R\" \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\r\\\\run_integrated_pipeline.R\" \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\INTEGRATED_PIPELINE_GUIDE.md\")",
+      "Bash(where Rscript)"
     ]
   }
 }

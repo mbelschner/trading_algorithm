@@ -2,10 +2,21 @@
 
 ## Übersicht
 
-Dieses Script implementiert **Meta-Labeling** nach Lopez de Prado's "Advances in Financial Machine Learning". Meta-Labeling ist eine zweistufige Machine Learning Strategie:
+Dieses System kombiniert **Triple Barrier Labeling** mit **Extrema-basiertem Meta-Labeling** nach Lopez de Prado:
 
-1. **Primary Model (Stufe 1)**: Bestimmt die **SIDE** des Trades (Long/Short)
-2. **Secondary Model (Stufe 2)**: Bestimmt die **SIZE** des Trades (0 = Skip, 1 = Take)
+1. **Triple Barrier**: Labelt ALLE Bars basierend auf Profit/Loss Barriers
+2. **Extrema Detection**: Erkennt lokale Minima/Maxima als Einstiegspunkte
+3. **Meta-Labeling**: Bewertet ob Extrema-Signale profitabel sind (0/1)
+
+### Workflow
+
+```
+Triple Barrier Labels → Historischer Kontext (alle Bars)
+                              ↓
+Extrema Detection → Primary Signal: Long/Short (nur bei Extrema)
+                              ↓
+Meta-Labeling → Target: Take/Skip Trade (0/1)
+```
 
 ### Warum Meta-Labeling?
 
@@ -183,25 +194,48 @@ full_data <- result$full_data          # Kompletter Datensatz
 
 ## Verwendung
 
-### Schritt 1: Lade Daten
+### Einfach: Führe main_script.R aus
+
+Das main_script.R enthält bereits die komplette Pipeline:
 
 ```r
-library(data.table)
-library(TTR)
+source("r/main_script.R")
+```
 
+Das erstellt automatisch:
+- ✅ Triple Barrier Labels für alle Bars
+- ✅ Extrema-basierte Meta-Labels für Signale
+- ✅ Detaillierte Analyse mit Vergleich
+- ✅ 4 Visualisierungen
+
+### Output Dateien
+
+Nach Ausführung findest du in `labelled_data/`:
+
+```
+GOLD_MINUTE_15_labeled.csv                # Triple Barrier Labels (alle Bars)
+GOLD_MINUTE_15_meta_labeled.csv          # Meta-Labels (nur Extrema-Signale)
+GOLD_MINUTE_15_with_extrema.csv          # Alle Bars + Extrema-Markierungen
+
+extrema_success_rate_over_time.png       # Success Rate Timeline
+extrema_pnl_distribution.png             # PnL Histogram
+extrema_exit_reasons.png                 # Exit Reason Analysis
+extrema_hourly_performance.png           # Performance by Hour
+```
+
+### Manuell: Nur Extrema Meta-Labeling
+
+Wenn du nur die Extrema-Signale generieren willst:
+
+```r
+# Lade Daten
 dt <- fread("price_data/GOLD_MINUTE_15.csv")
 setnames(dt, "time", "datetime")
-```
 
-### Schritt 2: Source Script
-
-```r
+# Lade Script
 source("r/02_meta_labeling_extrema_signals.R")
-```
 
-### Schritt 3: Generiere Meta-Labels
-
-```r
+# Generiere Meta-Labels
 result <- generate_meta_labeled_signals(
   prices = dt,
   lookback_bars = 5,
@@ -212,30 +246,14 @@ result <- generate_meta_labeled_signals(
   max_holding_bars = 20
 )
 
-meta_labeled <- result$meta_labeled
-```
+# Extrahiere
+meta_labeled <- result$meta_labeled  # Nur Signale
+full_data <- result$full_data        # Alle Bars
 
-### Schritt 4: Analysiere Ergebnisse
-
-```r
-# Label Verteilung
-table(meta_labeled$meta_label)
-
-# Success Rate
-mean(meta_labeled$meta_label, na.rm = TRUE)
-
-# Performance nach Side
-meta_labeled[, .(
-  count = .N,
-  success_rate = mean(meta_label, na.rm = TRUE),
-  avg_pnl = mean(realized_pnl, na.rm = TRUE)
-), by = primary_signal]
-```
-
-### Schritt 5: Speichern
-
-```r
-fwrite(meta_labeled, "labelled_data/GOLD_MINUTE_15_meta_labeled.csv")
+# Analysiere
+source("r/analyze_extrema_meta_labels.R")
+analyze_extrema_performance(meta_labeled)
+plot_extrema_analysis(meta_labeled)
 ```
 
 ---
