@@ -97,7 +97,7 @@ opt_params <- optimize_labeling_parameters(
    sort_by = "combined"  # Sortierung: "uniqueness" (default), "balance", oder "combined"
 )
 
-View(opt_params)
+#View(opt_params)
 
 #
 # # Zeige beste Kombination
@@ -246,6 +246,7 @@ combined_output <- file.path(
   labelled_output_path,
   paste0(EPIC, "_", INTERVAL, "_combined_labels.csv")
 )
+View(combined_labels)
 fwrite(combined_labels, combined_output)
 cat(sprintf("Kombinierte Labels gespeichert: %s\n", combined_output))
 

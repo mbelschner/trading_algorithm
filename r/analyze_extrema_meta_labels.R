@@ -187,7 +187,7 @@ analyze_extrema_performance <- function(
               min(meta_labeled$realized_pnl, na.rm = TRUE) * 100))
 
   # Quantiles
-  pnl_quantiles <- quantile(meta_labeled$realized_pnl, probs = c(0.1, 0.25, 0.5, 0.75, 0.9))
+  pnl_quantiles <- quantile(meta_labeled$realized_pnl, probs = c(0.1, 0.25, 0.5, 0.75, 0.9), na.rm = TRUE)
   cat("PnL Quantiles:\n")
   print(round(pnl_quantiles * 100, 2))
   cat("\n")
