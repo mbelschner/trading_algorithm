@@ -13,6 +13,7 @@ gc()
 pacman::p_load(
   data.table,      # Fast data manipulation
   TTR,             # Technical indicators
+  zoo,             # Time series (für rollapply)
   ggplot2,         # Visualization
   progress,        # Progress bars
   tictoc,          # Timing
@@ -63,9 +64,11 @@ cat("\n=== LADE GELABELTE DATEN ===\n")
 
 # Für diesen Test starten wir mit Triple Barrier Labels
 dt <- fread(triple_barrier_file)
+setDT(dt)  # Stelle sicher dass dt als data.table erkannt wird
 
 cat(sprintf("Geladene Zeilen: %s\n", format(nrow(dt), big.mark = ",")))
 cat(sprintf("Zeitraum: %s bis %s\n", min(dt$datetime), max(dt$datetime)))
+cat(sprintf("Spalten: %s\n", paste(head(names(dt), 10), collapse = ", ")))
 
 # Für schnellere Tests: Reduziere Datensatz (nur 2024-2025)
 USE_SMALL_DATASET <- TRUE  # Auf FALSE setzen für vollständige Analyse

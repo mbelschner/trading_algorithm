@@ -30,6 +30,13 @@ calculate_all_indicators <- function(
   # Kopiere Datensatz
   dt_ind <- copy(dt)
 
+  # Validiere erforderliche Spalten
+  required_cols <- c("open", "high", "low", "close", "volume")
+  missing_cols <- setdiff(required_cols, names(dt_ind))
+  if (length(missing_cols) > 0) {
+    stop("Fehlende Spalten: ", paste(missing_cols, collapse = ", "))
+  }
+
   # Basis-Preis-Features
   dt_ind[, `:=`(
     typical_price = (high + low + close) / 3,
@@ -76,7 +83,8 @@ calculate_all_indicators <- function(
   if (verbose) cat("  - ATR (", length(atr_periods), " Perioden)\n", sep = "")
   for (period in atr_periods) {
     col_name <- paste0("atr_", period)
-    dt_ind[, (col_name) := ATR(cbind(high, low, close), n = period)[, "atr"]]
+    atr_values <- with(dt_ind, ATR(cbind(high, low, close), n = period)[, "atr"])
+    dt_ind[, (col_name) := atr_values]
 
     # ATR % (normalisiert)
     atr_pct_col <- paste0("atr_", period, "_pct")
@@ -86,7 +94,7 @@ calculate_all_indicators <- function(
   # ===== 4. ADX (Average Directional Index) =====
   if (verbose) cat("  - ADX (", length(adx_periods), " Perioden)\n", sep = "")
   for (period in adx_periods) {
-    adx_result <- ADX(cbind(high, low, close), n = period)
+    adx_result <- with(dt_ind, ADX(cbind(high, low, close), n = period))
     dt_ind[, (paste0("adx_", period)) := adx_result[, "ADX"]]
     dt_ind[, (paste0("di_plus_", period)) := adx_result[, "DIp"]]
     dt_ind[, (paste0("di_minus_", period)) := adx_result[, "DIn"]]
@@ -112,7 +120,8 @@ calculate_all_indicators <- function(
       dt_ind[, (ema_col) := EMA(close, n = period)]
     }
     if (!atr_col %in% names(dt_ind)) {
-      dt_ind[, (atr_col) := ATR(cbind(high, low, close), n = period)[, "atr"]]
+      atr_values <- with(dt_ind, ATR(cbind(high, low, close), n = period)[, "atr"])
+      dt_ind[, (atr_col) := atr_values]
     }
 
     dt_ind[, (paste0("kc_upper_", period)) := get(ema_col) + 2 * get(atr_col)]
@@ -128,7 +137,7 @@ calculate_all_indicators <- function(
   # ===== 7. Bollinger Bands =====
   if (verbose) cat("  - Bollinger Bands\n")
   for (period in bb_periods) {
-    bb_result <- BBands(cbind(high, low, close), n = period, sd = 2)
+    bb_result <- with(dt_ind, BBands(cbind(high, low, close), n = period, sd = 2))
     dt_ind[, (paste0("bb_upper_", period)) := bb_result[, "up"]]
     dt_ind[, (paste0("bb_lower_", period)) := bb_result[, "dn"]]
     dt_ind[, (paste0("bb_mid_", period)) := bb_result[, "mavg"]]
@@ -163,13 +172,13 @@ calculate_all_indicators <- function(
   dt_ind[, kijun_sen := (runmax(high, 26) + runmin(low, 26)) / 2]
 
   # Senkou Span A (Leading Span A): (Tenkan + Kijun)/2, shifted 26 forward
-  dt_ind[, senkou_span_a := shift((tenkan_sen + kijun_sen) / 2, n = -26, type = "lag")]
+  dt_ind[, senkou_span_a := data.table::shift((tenkan_sen + kijun_sen) / 2, n = -26)]
 
   # Senkou Span B (Leading Span B): (52-period high + 52-period low)/2, shifted 26
-  dt_ind[, senkou_span_b := shift((runmax(high, 52) + runmin(low, 52)) / 2, n = -26, type = "lag")]
+  dt_ind[, senkou_span_b := data.table::shift((runmax(high, 52) + runmin(low, 52)) / 2, n = -26)]
 
   # Chikou Span (Lagging Span): Close shifted 26 backward
-  dt_ind[, chikou_span := shift(close, n = 26, type = "lag")]
+  dt_ind[, chikou_span := data.table::shift(close, n = 26)]
 
   # Cloud Position
   dt_ind[, ichimoku_position := fifelse(
@@ -179,7 +188,7 @@ calculate_all_indicators <- function(
 
   # ===== 10. Aroon Indicator =====
   if (verbose) cat("  - Aroon\n")
-  aroon_result <- aroon(cbind(high, low), n = 25)
+  aroon_result <- with(dt_ind, aroon(cbind(high, low), n = 25))
   dt_ind[, aroon_up := aroon_result[, "aroonUp"]]
   dt_ind[, aroon_down := aroon_result[, "aroonDn"]]
   dt_ind[, aroon_oscillator := aroon_result[, "oscillator"]]
@@ -204,7 +213,8 @@ calculate_all_indicators <- function(
     return(chop)
   }
 
-  dt_ind[, choppiness_14 := calculate_choppiness(high, low, close, period = 14)]
+  chop_values <- with(dt_ind, calculate_choppiness(high, low, close, period = 14))
+  dt_ind[, choppiness_14 := chop_values]
 
   # ===== 13. Donchian Channel =====
   if (verbose) cat("  - Donchian Channel\n")
@@ -216,7 +226,7 @@ calculate_all_indicators <- function(
 
   # ===== 14. Parabolic SAR =====
   if (verbose) cat("  - Parabolic SAR\n")
-  sar_result <- SAR(cbind(high, low), accel = c(0.02, 0.2))
+  sar_result <- with(dt_ind, SAR(cbind(high, low), accel = c(0.02, 0.2)))
   dt_ind[, sar := sar_result]
   dt_ind[, sar_signal := fifelse(close > sar, 1, -1)]  # 1 = bullish, -1 = bearish
 
@@ -228,14 +238,14 @@ calculate_all_indicators <- function(
   dt_ind[, volume_ratio := volume / (volume_ma_20 + 1e-10)]
 
   # On Balance Volume (OBV)
-  dt_ind[, obv := cumsum(fifelse(close > shift(close, 1), volume, -volume))]
+  dt_ind[, obv := cumsum(fifelse(close > data.table::shift(close, 1), volume, -volume))]
 
   # Volume Price Trend (VPT)
-  dt_ind[, vpt := cumsum(volume * (close - shift(close, 1)) / (shift(close, 1) + 1e-10))]
+  dt_ind[, vpt := cumsum(volume * (close - data.table::shift(close, 1)) / (data.table::shift(close, 1) + 1e-10))]
 
   # ===== 16. VHF (Vertical Horizontal Filter) =====
   if (verbose) cat("  - VHF (Vertical Horizontal Filter)\n")
-  calculate_vhf <- function(close, period = 28) {
+  calculate_vhf <- function(close, low, period = 28) {
     highest <- runmax(close, period)
     lowest <- runmin(low, period)
     price_changes <- abs(c(NA, diff(close)))
@@ -244,22 +254,24 @@ calculate_all_indicators <- function(
     return(vhf)
   }
 
-  dt_ind[, vhf_28 := calculate_vhf(close, period = 28)]
+  dt_ind[, vhf_28 := calculate_vhf(close, low, period = 28)]
 
   # ===== 17. Stochastic Oscillator =====
   if (verbose) cat("  - Stochastic Oscillator\n")
-  stoch_result <- stoch(cbind(high, low, close), nFastK = 14, nFastD = 3, nSlowD = 3)
+  stoch_result <- with(dt_ind, stoch(cbind(high, low, close), nFastK = 14, nFastD = 3, nSlowD = 3))
   dt_ind[, stoch_k := stoch_result[, "fastK"]]
   dt_ind[, stoch_d := stoch_result[, "fastD"]]
   dt_ind[, stoch_k_d_diff := stoch_k - stoch_d]
 
   # ===== 18. Williams %R =====
   if (verbose) cat("  - Williams %R\n")
-  dt_ind[, williams_r_14 := WPR(cbind(high, low, close), n = 14)]
+  wpr_values <- with(dt_ind, WPR(cbind(high, low, close), n = 14))
+  dt_ind[, williams_r_14 := wpr_values]
 
   # ===== 19. CCI (Commodity Channel Index) =====
   if (verbose) cat("  - CCI\n")
-  dt_ind[, cci_20 := CCI(cbind(high, low, close), n = 20)]
+  cci_values <- with(dt_ind, CCI(cbind(high, low, close), n = 20))
+  dt_ind[, cci_20 := cci_values]
 
   # ===== 20. CMO (Chande Momentum Oscillator) =====
   if (verbose) cat("  - CMO\n")
