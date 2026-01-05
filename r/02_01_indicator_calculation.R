@@ -166,27 +166,37 @@ calculate_all_indicators <- function(
   dt_ind[, mcginley_20 := calculate_mcginley(close, period = 20)]
 
   # ===== 9. Ichimoku Cloud =====
-  if (verbose) cat("  - Ichimoku Cloud\n")
+  # HINWEIS: Senkou Spans werden traditionell 26 Perioden voraus GEPLOTTET,
+  # aber für Trading müssen wir die historischen Werte verwenden (kein Look-Ahead Bias!)
+  if (verbose) cat("  - Ichimoku Cloud (ohne Look-Ahead Bias)\n")
+
   # Tenkan-sen (Conversion Line): (9-period high + 9-period low)/2
   dt_ind[, tenkan_sen := (runmax(high, 9) + runmin(low, 9)) / 2]
 
   # Kijun-sen (Base Line): (26-period high + 26-period low)/2
   dt_ind[, kijun_sen := (runmax(high, 26) + runmin(low, 26)) / 2]
 
-  # Senkou Span A (Leading Span A): (Tenkan + Kijun)/2, shifted 26 forward
-  dt_ind[, senkou_span_a := data.table::shift((tenkan_sen + kijun_sen) / 2, n = -26)]
+  # Senkou Span A: Berechne aktuellen Wert (ohne forward shift für Trading)
+  dt_ind[, senkou_span_a_calc := (tenkan_sen + kijun_sen) / 2]
+  # Für Trading: verwende den Wert von vor 26 Perioden (das ist die "aktuelle" Cloud)
+  dt_ind[, senkou_span_a := data.table::shift(senkou_span_a_calc, n = 26)]
 
-  # Senkou Span B (Leading Span B): (52-period high + 52-period low)/2, shifted 26
-  dt_ind[, senkou_span_b := data.table::shift((runmax(high, 52) + runmin(low, 52)) / 2, n = -26)]
+  # Senkou Span B: (52-period high + 52-period low)/2
+  dt_ind[, senkou_span_b_calc := (runmax(high, 52) + runmin(low, 52)) / 2]
+  # Für Trading: verwende den Wert von vor 26 Perioden
+  dt_ind[, senkou_span_b := data.table::shift(senkou_span_b_calc, n = 26)]
 
   # Chikou Span (Lagging Span): Close shifted 26 backward
   dt_ind[, chikou_span := data.table::shift(close, n = 26)]
 
-  # Cloud Position
+  # Cloud Position (basierend auf korrigierten Werten)
   dt_ind[, ichimoku_position := fifelse(
     close > pmax(senkou_span_a, senkou_span_b, na.rm = TRUE), 1,  # Above cloud
     fifelse(close < pmin(senkou_span_a, senkou_span_b, na.rm = TRUE), -1, 0)  # Below cloud
   )]
+
+  # Entferne temporäre Berechnungsspalten
+  dt_ind[, c("senkou_span_a_calc", "senkou_span_b_calc") := NULL]
 
   # ===== 10. Aroon Indicator =====
   if (verbose) cat("  - Aroon\n")

@@ -146,7 +146,20 @@ select_important_features <- function(
 #' XGBoost Feature Selection
 select_features_xgboost <- function(X, y, weights, feature_names, cv_folds = 3, verbose = TRUE) {
 
-  if (verbose) cat("Führe XGBoost Feature Selection durch...\n")
+  if (verbose) {
+    cat("Führe XGBoost Feature Selection durch...\n")
+    cat(sprintf("  Features: %d\n", ncol(X)))
+    cat(sprintf("  Samples: %s\n", format(nrow(X), big.mark = ",")))
+    cat(sprintf("  CV Folds: %d\n", cv_folds))
+
+    # Zeitschätzung (grob: ~2-5 Sekunden pro Fold für 30 Features)
+    est_time_per_fold <- ifelse(ncol(X) < 50, 2,
+                                 ifelse(ncol(X) < 200, 5, 10))
+    est_total_time <- est_time_per_fold * cv_folds
+    cat(sprintf("  Geschätzte Zeit: ~%d-%d Sekunden\n",
+                est_total_time, est_total_time * 2))
+    cat("\n")
+  }
 
   # Initialisiere Importance-Tracker
   importance_scores <- rep(0, ncol(X))
@@ -154,8 +167,10 @@ select_features_xgboost <- function(X, y, weights, feature_names, cv_folds = 3, 
 
   # CV Loop für stabilere Importance
   pb <- progress_bar$new(
-    format = "  Fold [:bar] :current/:total (:percent) eta: :eta",
-    total = cv_folds
+    format = "  Fold [:bar] :current/:total (:percent) | ETA: :eta | Elapsed: :elapsed",
+    total = cv_folds,
+    clear = FALSE,
+    width = 60
   )
 
   for (fold in 1:cv_folds) {
@@ -174,16 +189,23 @@ select_features_xgboost <- function(X, y, weights, feature_names, cv_folds = 3, 
     params <- list(
       objective = "binary:logistic",
       eval_metric = "auc",
-      max_depth = 6,
-      eta = 0.1,
+      max_depth = 4,
+      eta = 0.05,
       subsample = 0.8,
-      colsample_bytree = 0.8
+      colsample_bytree = 0.8,
+      colsample_bynode = 0.8,
+      min_child_weight = 10,
+      gamma = 0,
+      lambda = 1,
+      alpha = 0
     )
 
     xgb_model <- xgb.train(
       params = params,
       data = dtrain,
-      nrounds = 100,
+      nrounds = 1000,
+      watchlist = list(train = dtrain),
+      early_stopping_rounds = 50,
       verbose = 0
     )
 
@@ -212,7 +234,20 @@ select_features_xgboost <- function(X, y, weights, feature_names, cv_folds = 3, 
 #' Random Forest (ranger) Feature Selection
 select_features_ranger <- function(X, y, weights, feature_names, cv_folds = 3, verbose = TRUE) {
 
-  if (verbose) cat("Führe Random Forest Feature Selection durch...\n")
+  if (verbose) {
+    cat("Führe Random Forest Feature Selection durch...\n")
+    cat(sprintf("  Features: %d\n", ncol(X)))
+    cat(sprintf("  Samples: %s\n", format(nrow(X), big.mark = ",")))
+    cat(sprintf("  CV Folds: %d\n", cv_folds))
+
+    # Zeitschätzung für Random Forest (langsamer als XGBoost)
+    est_time_per_fold <- ifelse(ncol(X) < 50, 5,
+                                 ifelse(ncol(X) < 200, 15, 30))
+    est_total_time <- est_time_per_fold * cv_folds
+    cat(sprintf("  Geschätzte Zeit: ~%d-%d Sekunden\n",
+                est_total_time, est_total_time * 1.5))
+    cat("\n")
+  }
 
   # Initialisiere Importance-Tracker
   importance_scores <- rep(0, ncol(X))
@@ -224,8 +259,10 @@ select_features_ranger <- function(X, y, weights, feature_names, cv_folds = 3, v
 
   # CV Loop
   pb <- progress_bar$new(
-    format = "  Fold [:bar] :current/:total (:percent) eta: :eta",
-    total = cv_folds
+    format = "  Fold [:bar] :current/:total (:percent) | ETA: :eta | Elapsed: :elapsed",
+    total = cv_folds,
+    clear = FALSE,
+    width = 60
   )
 
   for (fold in 1:cv_folds) {
@@ -271,19 +308,35 @@ select_features_boruta <- function(X, y, feature_names, verbose = TRUE) {
     stop("Boruta package not installed. Install with: install.packages('Boruta')")
   }
 
-  if (verbose) cat("Führe Boruta Feature Selection durch...\n")
+  if (verbose) {
+    cat("Führe Boruta Feature Selection durch...\n")
+    cat(sprintf("  Features: %d\n", ncol(X)))
+    cat(sprintf("  Samples: %s\n", format(nrow(X), big.mark = ",")))
+
+    # Boruta ist langsam (parallelisiert für bessere Performance)
+    est_time_min <- ifelse(ncol(X) < 50, 1,
+                           ifelse(ncol(X) < 200, 3, 10))
+    est_time_max <- est_time_min * 2
+    cat(sprintf("  Geschätzte Zeit: ~%d-%d Minuten (parallelisiert)\n",
+                est_time_min, est_time_max))
+    cat(sprintf("  Max Runs: 100 | Trees: 500 | Threads: %d\n",
+                parallel::detectCores() - 1))
+    cat("\n")
+    cat("  TIPP: Für schnellere Feature Selection verwende 'xgboost' statt 'boruta'\n\n")
+  }
 
   # Erstelle data.frame
   train_df <- as.data.frame(X)
   colnames(train_df) <- feature_names
   train_df$target <- as.factor(y)
 
-  # Führe Boruta durch
+  # Führe Boruta durch (parallelisiert)
   boruta_result <- Boruta::Boruta(
     target ~ .,
     data = train_df,
     doTrace = ifelse(verbose, 2, 0),
-    maxRuns = 100
+    maxRuns = 100,  # Standard: 100 Runs
+    num.threads = parallel::detectCores() - 1  # Parallelisierung aktiviert
   )
 
   # Extrahiere bestätigte Features
@@ -291,7 +344,7 @@ select_features_boruta <- function(X, y, feature_names, verbose = TRUE) {
   tentative <- names(boruta_result$finalDecision[boruta_result$finalDecision == "Tentative"])
 
   # Importance Scores (Z-scores aus Boruta)
-  imp_stats <- attStats(boruta_result)
+  imp_stats <- Boruta::attStats(boruta_result)
   importance_scores <- imp_stats$meanImp
   names(importance_scores) <- rownames(imp_stats)
 

@@ -72,7 +72,7 @@ cat(sprintf("Zeitraum: %s bis %s\n", min(dt$datetime), max(dt$datetime)))
 cat(sprintf("Spalten: %s\n", paste(head(names(dt), 10), collapse = ", ")))
 
 # Für schnellere Tests: Reduziere Datensatz (nur 2024-2025)
-USE_SMALL_DATASET <- TRUE  # Auf FALSE setzen für vollständige Analyse
+USE_SMALL_DATASET <- FALSE  # Auf FALSE setzen für vollständige Analyse
 
 if (USE_SMALL_DATASET) {
   dt_small <- dt[datetime >= "2024-01-01" & datetime <= "2025-12-31"]
@@ -213,25 +213,57 @@ if (!use_sample_weights) {
   dt_long[, sample_weight := 1.0]
 }
 
+# ===== STUFE 1: XGBoost (schnell) - ~380 Features → 50 Features =====
+cat("\n--- STUFE 1: XGBoost Feature Selection (schnell) ---\n")
+
 tic()
-feature_selection_long <- select_important_features(
+feature_selection_stage1_long <- select_important_features(
   dt = dt_long,
   target_col = target_col,
   weight_col = weight_col,
-  method = "xgboost",              # "xgboost", "ranger", oder "boruta"
-  n_top_features = 30,             # Top 25 Features
-  cv_folds = 7,                    # 3-fold CV für schnellere Feature Selection
+  method = "xgboost",           # Schnell und effizient
+  n_top_features = 50,          # Reduziere auf 50
+  cv_folds = 5,                 # 5-fold für Stabilität
   verbose = TRUE
 )
 toc()
 
-top_features_long <- feature_selection_long$top_features
-feature_importance_long <- feature_selection_long$importance
+top_features_stage1_long <- feature_selection_stage1_long$top_features
+cat(sprintf("\n✓ Stufe 1 abgeschlossen: %d Features reduziert auf %d Features\n",
+            length(feature_selection_stage1_long$importance$feature),
+            length(top_features_stage1_long)))
 
-cat(sprintf("\nTop 25 Features für LONG Model:\n"))
-print(head(feature_importance_long, 25))
+# Erstelle reduzierten Datensatz für Stufe 2
+required_cols_temp <- c("datetime", "label", target_col, weight_col,
+                        "barrier_touched", "bars_to_exit", "realized_return")
+dt_long_stage1 <- dt_long[, c(required_cols_temp, top_features_stage1_long), with = FALSE]
 
-# Erstelle reduzierten Long-Datensatz
+# ===== STUFE 2: Boruta (gründlich) - 50 Features → 10 Features =====
+cat("\n--- STUFE 2: Boruta Feature Selection (gründlich) ---\n")
+cat("HINWEIS: Boruta ist langsam, aber findet die wirklich relevanten Features!\n\n")
+
+tic()
+feature_selection_stage2_long <- select_important_features(
+  dt = dt_long_stage1,
+  target_col = target_col,
+  weight_col = weight_col,
+  method = "boruta",            # Gründlich und präzise
+  n_top_features = 12,          # Finale Top 12
+  cv_folds = 1,                 # Boruta braucht kein CV
+  verbose = TRUE
+)
+toc()
+
+top_features_long <- feature_selection_stage2_long$top_features
+feature_importance_long <- feature_selection_stage2_long$importance
+
+cat(sprintf("\n✓ Stufe 2 abgeschlossen: %d Features → %d Features\n",
+            length(top_features_stage1_long), length(top_features_long)))
+
+cat(sprintf("\n=== FINALE TOP  FEATURES FÜR LONG MODEL ===\n"))
+print(head(feature_importance_long, 20))
+
+# Erstelle finalen reduzierten Long-Datensatz
 required_cols <- c("datetime", "label", target_col, weight_col,
                    "barrier_touched", "bars_to_exit", "realized_return")
 feature_cols_long <- top_features_long
@@ -414,25 +446,55 @@ if (!use_sample_weights) {
   dt_short[, sample_weight := 1.0]
 }
 
+# ===== STUFE 1: XGBoost (schnell) - ~380 Features → 50 Features =====
+cat("\n--- STUFE 1: XGBoost Feature Selection (schnell) ---\n")
+
 tic()
-feature_selection_short <- select_important_features(
+feature_selection_stage1_short <- select_important_features(
   dt = dt_short,
   target_col = target_col,
   weight_col = weight_col,
   method = "xgboost",
-  n_top_features = 25,
-  cv_folds = 3,
+  n_top_features = 50,
+  cv_folds = 5,
   verbose = TRUE
 )
 toc()
 
-top_features_short <- feature_selection_short$top_features
-feature_importance_short <- feature_selection_short$importance
+top_features_stage1_short <- feature_selection_stage1_short$top_features
+cat(sprintf("\n✓ Stufe 1 abgeschlossen: %d Features reduziert auf %d Features\n",
+            length(feature_selection_stage1_short$importance$feature),
+            length(top_features_stage1_short)))
 
-cat(sprintf("\nTop 25 Features für SHORT Model:\n"))
-print(head(feature_importance_short, 25))
+# Erstelle reduzierten Datensatz für Stufe 2
+dt_short_stage1 <- dt_short[, c(required_cols_temp, top_features_stage1_short), with = FALSE]
 
-# Erstelle reduzierten Short-Datensatz
+# ===== STUFE 2: Boruta (gründlich) - 50 Features → 10 Features =====
+cat("\n--- STUFE 2: Boruta Feature Selection (gründlich) ---\n")
+cat("HINWEIS: Boruta ist langsam, aber findet die wirklich relevanten Features!\n\n")
+
+tic()
+feature_selection_stage2_short <- select_important_features(
+  dt = dt_short_stage1,
+  target_col = target_col,
+  weight_col = weight_col,
+  method = "boruta",
+  n_top_features = 12,
+  cv_folds = 1,
+  verbose = TRUE
+)
+toc()
+
+top_features_short <- feature_selection_stage2_short$top_features
+feature_importance_short <- feature_selection_stage2_short$importance
+
+cat(sprintf("\n✓ Stufe 2 abgeschlossen: %d Features → %d Features\n",
+            length(top_features_stage1_short), length(top_features_short)))
+
+cat(sprintf("\n=== FINALE TOP FEATURES FÜR SHORT MODEL ===\n"))
+print(head(feature_importance_short, 20))
+
+# Erstelle finalen reduzierten Short-Datensatz
 feature_cols_short <- top_features_short
 
 dt_short_reduced <- dt_short[, c(required_cols, feature_cols_short), with = FALSE]
@@ -465,7 +527,7 @@ model_results_short <- train_and_evaluate_models(
   weight_col = weight_col,
   feature_cols = feature_cols_short,
   hyperparam_grid = hyperparameter_grid,
-  models = c("xgboost", "ranger"),
+  models ="xgboost",,
   n_cores = parallel::detectCores() - 1,
   verbose = TRUE
 )
