@@ -144,6 +144,8 @@ dt_features <- engineer_features(
 )
 toc()
 
+summary(dt_features$obv)
+
 cat(sprintf("Features nach Engineering: %d\n", ncol(dt_features)))
 
 # Entferne Zeilen mit NA (durch Lags/Rolling Windows entstanden)
@@ -191,7 +193,7 @@ print(head(feature_importance, 25))
 
 # Erstelle reduzierten Datensatz mit Top Features
 required_cols <- c("datetime", target_col, weight_col,
-                   "t1", "barrier_hit", "return")  # Meta-Daten für CV
+                   "barrier_touched", "bars_to_exit", "realized_return")  # Meta-Daten für CV
 feature_cols <- top_features
 
 dt_reduced <- dt_features[, c(required_cols, feature_cols), with = FALSE]

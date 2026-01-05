@@ -105,9 +105,11 @@ calculate_all_indicators <- function(
   }
 
   # ===== 5. DPO (Detrended Price Oscillator) =====
-  if (verbose) cat("  - DPO\n")
+  # HINWEIS: Standard DPO hat Look-Ahead Bias (zentrierter MA)
+  # Verwende stattdessen: Close - SMA (kein Offset)
+  if (verbose) cat("  - DPO (ohne Look-Ahead Bias)\n")
   dpo_period <- 20
-  dt_ind[, dpo_20 := DPO(close, n = dpo_period)]
+  dt_ind[, dpo_20 := close - SMA(close, n = dpo_period)]
 
   # ===== 6. Keltner Channel =====
   if (verbose) cat("  - Keltner Channel\n")
@@ -238,10 +240,18 @@ calculate_all_indicators <- function(
   dt_ind[, volume_ratio := volume / (volume_ma_20 + 1e-10)]
 
   # On Balance Volume (OBV)
-  dt_ind[, obv := cumsum(fifelse(close > data.table::shift(close, 1), volume, -volume))]
+  dt_ind[, close_prev := data.table::shift(close, 1)]
+  dt_ind[, obv_change := fifelse(is.na(close_prev), 0,
+                                  fifelse(close > close_prev, volume, -volume))]
+  dt_ind[, obv := cumsum(obv_change)]
+  dt_ind[, c("close_prev", "obv_change") := NULL]
 
   # Volume Price Trend (VPT)
-  dt_ind[, vpt := cumsum(volume * (close - data.table::shift(close, 1)) / (data.table::shift(close, 1) + 1e-10))]
+  dt_ind[, close_prev := data.table::shift(close, 1)]
+  dt_ind[, vpt_change := fifelse(is.na(close_prev), 0,
+                                  volume * (close - close_prev) / (close_prev + 1e-10))]
+  dt_ind[, vpt := cumsum(vpt_change)]
+  dt_ind[, c("close_prev", "vpt_change") := NULL]
 
   # ===== 16. VHF (Vertical Horizontal Filter) =====
   if (verbose) cat("  - VHF (Vertical Horizontal Filter)\n")

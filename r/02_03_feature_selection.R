@@ -25,9 +25,12 @@ select_important_features <- function(
 
   if (verbose) cat(sprintf("\n=== Feature Selection (%s) ===\n", toupper(method)))
 
-  # Identifiziere Feature-Spalten
-  exclude_cols <- c("datetime", target_col, weight_col, "t1", "barrier_hit", "return",
-                    "open", "high", "low", "close", "volume")
+  # Identifiziere Feature-Spalten (exkludiere Meta-Daten und OHLCV)
+  exclude_cols <- c("datetime", target_col, weight_col,
+                    "barrier_touched", "bars_to_exit", "realized_return",
+                    "upper_barrier", "lower_barrier", "effective_horizon",
+                    "open", "high", "low", "close", "volume",
+                    "label", "label_binary", "atr", "atr_pct", "hour", "date", "in_session")  # Exkludiere alle Label-Varianten und Meta-Daten
   all_cols <- names(dt)
   feature_cols <- setdiff(all_cols, exclude_cols)
 

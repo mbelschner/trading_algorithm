@@ -62,9 +62,9 @@ detect_local_extrema <- function(
 
   # Berechne Rolling Min/Max für lookback window
   dt[, roll_min_left := roll_minl(low, n = lookback_bars + 1, fill = NA)]
-  dt[, roll_min_right := roll_minr(shift(low, type = "lead"), n = lookback_bars + 1, fill = NA)]
+  dt[, roll_min_right := roll_minr(data.table::shift(low, n = -1), n = lookback_bars + 1, fill = NA)]
   dt[, roll_max_left := roll_maxl(high, n = lookback_bars + 1, fill = NA)]
-  dt[, roll_max_right := roll_maxr(shift(high, type = "lead"), n = lookback_bars + 1, fill = NA)]
+  dt[, roll_max_right := roll_maxr(data.table::shift(high, n = -1), n = lookback_bars + 1, fill = NA)]
 
   # Vektorisierte Extrema Detection
   dt[, is_local_min_candidate := (low <= roll_min_left) & (low <= roll_min_right)]

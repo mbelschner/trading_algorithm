@@ -61,7 +61,7 @@ engineer_features <- function(
     for (col in important_for_lags) {
       for (lag in lag_periods) {
         lag_col_name <- paste0(col, "_lag", lag)
-        dt_feat[, (lag_col_name) := shift(get(col), n = lag, type = "lag")]
+        dt_feat[, (lag_col_name) := data.table::shift(get(col), n = lag)]
         pb$tick()
       }
     }

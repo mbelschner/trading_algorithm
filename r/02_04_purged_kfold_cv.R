@@ -28,13 +28,28 @@ create_purged_kfold_splits <- function(
     stop("Column 'datetime' not found in data")
   }
 
-  if (!"t1" %in% names(dt)) {
-    stop("Column 't1' (label end time) not found in data")
-  }
-
   # Konvertiere datetime zu POSIXct falls nötig
   if (!inherits(dt$datetime, "POSIXct")) {
     dt[, datetime := as.POSIXct(datetime)]
+  }
+
+  # Erstelle t1 (Label-End-Zeit) falls nicht vorhanden
+  # Verwende bars_to_exit um t1 zu berechnen
+  if (!"t1" %in% names(dt)) {
+    if ("bars_to_exit" %in% names(dt)) {
+      if (verbose) cat("Berechne t1 aus bars_to_exit...\n")
+
+      # Vektorisierte Berechnung von t1
+      # Annahme: Bars haben konstantes Zeitintervall
+      n <- nrow(dt)
+      time_diff <- as.numeric(difftime(dt$datetime[2], dt$datetime[1], units = "secs"))
+
+      # t1 = datetime + (bars_to_exit * time_diff)
+      dt[, t1 := datetime + bars_to_exit * time_diff]
+
+    } else {
+      stop("Column 't1' (label end time) not found and cannot be calculated from 'bars_to_exit'")
+    }
   }
 
   if (!inherits(dt$t1, "POSIXct")) {
