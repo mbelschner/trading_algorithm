@@ -32,16 +32,23 @@ pacman::p_load(
 price_data_path <- file.path("price_data")
 labelled_data_path <- file.path("labelled_data")
 backtest_output_path <- file.path("backtest_results")
+features_cache_path <- file.path("feature_cache")
 
 # Erstelle Output-Ordner falls nicht vorhanden
 if (!dir.exists(backtest_output_path)) {
   dir.create(backtest_output_path, recursive = TRUE)
+}
+if (!dir.exists(features_cache_path)) {
+  dir.create(features_cache_path, recursive = TRUE)
 }
 
 # ===== Configuration ==========================================================
 
 EPIC <- "GOLD"
 INTERVAL <- "MINUTE_15"
+
+# Feature Caching: Setzt auf TRUE um Features neu zu berechnen
+FORCE_RECALCULATE_FEATURES <- FALSE
 
 # ===== STEP 0: Load Raw Price Data and Labels ================================
 
@@ -122,50 +129,86 @@ cat("✓ Backtest Evaluation geladen\n")
 
 # ===== Step 1: Calculate Technical Indicators ================================
 
-cat("\n=== STEP 1: BERECHNE TECHNISCHE INDIKATOREN ===\n")
-
-tic()
-dt_indicators <- calculate_all_indicators(
-  dt = dt,
-  # Periods für multi-timeframe Indikatoren
-  ema_periods = c(9, 21, 50, 100),
-  rsi_periods = c(14, 28),
-  atr_periods = c(14, 28),
-  adx_periods = c(14),
-  bb_periods = c(20),
-  kc_periods = c(20),
-  # Weitere Parameter siehe 02_01_indicator_calculation.R
-  verbose = TRUE
+# Check if cached features exist
+features_cache_file <- file.path(
+  features_cache_path,
+  paste0(EPIC, "_", INTERVAL, "_features.csv")
 )
-toc()
-#View(dt_indicators)
-cat(sprintf("Features nach Indikator-Berechnung: %d\n", ncol(dt_indicators)))
 
-# ===== Step 2: Feature Engineering (Lags, Derivatives) =======================
+if (file.exists(features_cache_file) && !FORCE_RECALCULATE_FEATURES) {
+  cat("\n=== LADE GECACHTE FEATURES ===\n")
+  cat(sprintf("Lade Features aus Cache: %s\n", features_cache_file))
 
-cat("\n=== STEP 2: FEATURE ENGINEERING ===\n")
+  dt_features <- fread(features_cache_file)
+  setDT(dt_features)
 
-tic()
-dt_features <- engineer_features(
-  dt = dt_indicators,
-  lag_periods = c(1, 2, 3, 5, 10),           # Lags
-  derivative_orders = c(1, 2),                # 1. und 2. Ableitung
-  hourly_aggregation = TRUE,                  # 1h Aggregate
-  rolling_windows = c(10, 20, 50),           # Rolling Stats
-  interaction_features = FALSE,               # Erst nach Feature Selection
-  verbose = TRUE
-)
-toc()
+  cat(sprintf("✓ Features geladen: %s Zeilen, %d Spalten\n",
+              format(nrow(dt_features), big.mark = ","),
+              ncol(dt_features)))
+  cat("Hinweis: Setze FORCE_RECALCULATE_FEATURES = TRUE um Features neu zu berechnen\n")
 
-cat(sprintf("Features nach Engineering: %d\n", ncol(dt_features)))
+} else {
 
-# Entferne Zeilen mit NA (durch Lags/Rolling Windows entstanden)
-n_before <- nrow(dt_features)
-dt_features <- na.omit(dt_features)
-n_after <- nrow(dt_features)
-cat(sprintf("Zeilen nach NA-Entfernung: %s (-%s)\n",
-            format(n_after, big.mark = ","),
-            format(n_before - n_after, big.mark = ",")))
+  if (FORCE_RECALCULATE_FEATURES) {
+    cat("\n=== FORCE_RECALCULATE_FEATURES = TRUE: Berechne Features neu ===\n")
+  } else {
+    cat("\n=== KEINE GECACHTEN FEATURES GEFUNDEN: Berechne Features ===\n")
+  }
+
+  cat("\n=== STEP 1: BERECHNE TECHNISCHE INDIKATOREN ===\n")
+
+  tic()
+  dt_indicators <- calculate_all_indicators(
+    dt = dt,
+    # Periods für multi-timeframe Indikatoren
+    ema_periods = c(9, 21, 50, 100),
+    rsi_periods = c(14, 28),
+    atr_periods = c(14, 28),
+    adx_periods = c(14),
+    bb_periods = c(20),
+    kc_periods = c(20),
+    # Weitere Parameter siehe 02_01_indicator_calculation.R
+    verbose = TRUE
+  )
+  toc()
+  #View(dt_indicators)
+  cat(sprintf("Features nach Indikator-Berechnung: %d\n", ncol(dt_indicators)))
+
+  # ===== Step 2: Feature Engineering (Lags, Derivatives) =======================
+
+  cat("\n=== STEP 2: FEATURE ENGINEERING ===\n")
+
+  tic()
+  dt_features <- engineer_features(
+    dt = dt_indicators,
+    lag_periods = c(1, 2, 3, 5, 10),           # Lags
+    derivative_orders = c(1, 2),                # 1. und 2. Ableitung
+    hourly_aggregation = TRUE,                  # 1h Aggregate
+    rolling_windows = c(10, 20, 50),           # Rolling Stats
+    interaction_features = FALSE,               # Erst nach Feature Selection
+    verbose = TRUE
+  )
+  toc()
+
+  cat(sprintf("Features nach Engineering: %d\n", ncol(dt_features)))
+
+  # Entferne Zeilen mit NA (durch Lags/Rolling Windows entstanden)
+  n_before <- nrow(dt_features)
+  dt_features <- na.omit(dt_features)
+  n_after <- nrow(dt_features)
+  cat(sprintf("Zeilen nach NA-Entfernung: %s (-%s)\n",
+              format(n_after, big.mark = ","),
+              format(n_before - n_after, big.mark = ",")))
+
+  # ===== SPEICHERE FEATURES IM CACHE =====
+
+  cat("\n=== SPEICHERE FEATURES IM CACHE ===\n")
+  fwrite(dt_features, features_cache_file)
+  cat(sprintf("✓ Features gespeichert: %s\n", features_cache_file))
+  cat(sprintf("  %s Zeilen, %d Spalten\n",
+              format(nrow(dt_features), big.mark = ","),
+              ncol(dt_features)))
+}
 
 # ===== STEP 2b: Merge Labels with Features ===================================
 

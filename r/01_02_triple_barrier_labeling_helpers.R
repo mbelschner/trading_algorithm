@@ -960,6 +960,114 @@ filter_labels_exit_based <- function(labeled_data,
 
 
 # =============================================================================
+# AGGRESSIVE NEUTRAL RELABELING
+# =============================================================================
+# Re-labels samples to neutral based on multiple criteria:
+# - Vertical/session exits
+# - Small realized returns
+# - Low sample weights (high overlap)
+
+relabel_to_neutral <- function(labeled_data,
+                                return_threshold = 0.0015,  # 0.15% - CONFIGURABLE
+                                weight_threshold = 0.7,
+                                preserve_original = TRUE) {
+
+  dt <- copy(labeled_data)
+
+  # Preserve original labels
+  if(preserve_original) dt[, label_original := label]
+
+  # Count before
+  n_before_relabel <- sum(dt$label != 0)
+
+  # Apply aggressive neutral relabeling (ANY condition triggers)
+  dt[barrier_touched %in% c("vertical", "session_end") |
+     abs(realized_return) < return_threshold |
+     sample_weight < weight_threshold,
+     label := 0L]
+
+  # Count after & statistics
+  n_after_relabel <- sum(dt$label != 0)
+  n_relabeled <- n_before_relabel - n_after_relabel
+
+  cat(sprintf("\n=== AGGRESSIVE NEUTRAL RELABELING ===\n"))
+  cat(sprintf("Non-neutral before: %s\n", format(n_before_relabel, big.mark = ",")))
+  cat(sprintf("Non-neutral after:  %s\n", format(n_after_relabel, big.mark = ",")))
+  cat(sprintf("Relabeled to neutral: %s (%.1f%%)\n",
+              format(n_relabeled, big.mark = ","),
+              n_relabeled / n_before_relabel * 100))
+
+  # Breakdown by criterion
+  if(preserve_original) {
+    dt_relabeled <- dt[label_original != 0 & label == 0]
+    n_vertical <- sum(dt_relabeled$barrier_touched %in% c("vertical", "session_end"))
+    n_small_return <- sum(abs(dt_relabeled$realized_return) < return_threshold)
+    n_low_weight <- sum(dt_relabeled$sample_weight < weight_threshold)
+
+    cat("\nRelabeling reasons (may overlap):\n")
+    cat(sprintf("  Vertical/Session exits:  %s (%.1f%%)\n",
+                format(n_vertical, big.mark = ","),
+                n_vertical / n_relabeled * 100))
+    cat(sprintf("  Small returns (< %.4f%%): %s (%.1f%%)\n",
+                return_threshold * 100,
+                format(n_small_return, big.mark = ","),
+                n_small_return / n_relabeled * 100))
+    cat(sprintf("  Low weights (< %.2f):     %s (%.1f%%)\n",
+                weight_threshold,
+                format(n_low_weight, big.mark = ","),
+                n_low_weight / n_relabeled * 100))
+  }
+
+  # Validation warning
+  pct_neutral <- sum(dt$label == 0) / nrow(dt) * 100
+  if(pct_neutral > 70) {
+    cat(sprintf("\n⚠ WARNING: %.1f%% of labels are now neutral - may be too aggressive!\n", pct_neutral))
+  }
+
+  return(dt)
+}
+
+
+# =============================================================================
+# QUALITY METRICS REPORTING
+# =============================================================================
+# Standardized function to print quality metrics for labeled datasets
+
+print_quality_metrics <- function(labeled_data, version_name) {
+  cat(sprintf("\n--- %s VERSION QUALITY METRICS ---\n", version_name))
+  cat(sprintf("Total labels: %s\n", format(nrow(labeled_data), big.mark = ",")))
+  cat(sprintf("Mean sample weight: %.4f\n", mean(labeled_data$sample_weight)))
+  cat(sprintf("Mean concurrent: %.2f\n", mean(labeled_data$n_concurrent)))
+
+  # ACF
+  labels_num <- as.numeric(labeled_data$label)
+  acf_result <- acf(labels_num, lag.max = 10, plot = FALSE)
+
+  # Handle NaN/NA in ACF (happens when all labels are the same)
+  if(is.na(acf_result$acf[2]) || is.nan(acf_result$acf[2])) {
+    cat("ACF Lag-1: N/A (constant series)\n")
+  } else {
+    cat(sprintf("ACF Lag-1: %.4f", acf_result$acf[2]))
+    if(abs(acf_result$acf[2]) < 0.2) {
+      cat(" ✅ (Target: < 0.2)\n")
+    } else {
+      cat(" ⚠ (Target: < 0.2)\n")
+    }
+  }
+
+  cat("\nLabel distribution:\n")
+  print(table(labeled_data$label))
+  cat(sprintf("Percentages: Short=%.1f%%, Long=%.1f%%, Neutral=%.1f%%\n",
+              prop.table(table(labeled_data$label))["-1"] * 100,
+              prop.table(table(labeled_data$label))["1"] * 100,
+              ifelse("0" %in% names(table(labeled_data$label)),
+                     prop.table(table(labeled_data$label))["0"] * 100, 0)))
+
+  return(invisible(acf_result))
+}
+
+
+# =============================================================================
 # AUTOCORRELATION ANALYSIS & COMPARISON
 # =============================================================================
 # Analyzes autocorrelation before/after filtering and creates comparison plots
@@ -1077,8 +1185,7 @@ analyze_label_autocorrelation <- function(labeled_before,
     ggsave(output_file, p, width = 10, height = 6, dpi = 300)
     cat(sprintf("\nPlot saved: %s\n", output_file))
 
-    # Also print plot
-    print(p)
+    
   }
 
   return(results)
