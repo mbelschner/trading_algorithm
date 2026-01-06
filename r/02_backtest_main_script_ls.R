@@ -29,6 +29,7 @@ pacman::p_load(
 
 # ===== Paths ==================================================================
 
+price_data_path <- file.path("price_data")
 labelled_data_path <- file.path("labelled_data")
 backtest_output_path <- file.path("backtest_results")
 
@@ -42,48 +43,59 @@ if (!dir.exists(backtest_output_path)) {
 EPIC <- "GOLD"
 INTERVAL <- "MINUTE_15"
 
-# Lade gelabelte Daten (erstellt von 01_labelling_main_script.R)
-# Option 1: Triple Barrier Labels
-triple_barrier_file <- file.path(
-  labelled_data_path,
-  paste0(EPIC, "_", INTERVAL, "_labeled.csv")
-)
+# ===== STEP 0: Load Raw Price Data and Labels ================================
 
-# Option 2: Meta Labels
-meta_labels_file <- file.path(
-  labelled_data_path,
-  paste0(EPIC, "_", INTERVAL, "_meta_labeled.csv")
-)
+cat("\n=== STEP 0: LADE ROHE PREISDATEN UND LABELS ===\n")
 
-# Option 3: Combined Labels
-combined_labels_file <- file.path(
-  labelled_data_path,
-  paste0(EPIC, "_", INTERVAL, "_combined_labels.csv")
-)
+# 1. Lade rohe Preisdaten
+prices_file <- file.path(price_data_path, paste0(EPIC, "_", INTERVAL, ".csv"))
+cat(sprintf("Lade Preisdaten: %s\n", prices_file))
+dt_prices <- fread(prices_file)
+setDT(dt_prices)
 
-cat("\n=== LADE GELABELTE DATEN ===\n")
+# Rename 'time' to 'datetime' if necessary
+if ("time" %in% names(dt_prices)) {
+  setnames(dt_prices, "time", "datetime")
+}
 
-# Für diesen Test starten wir mit Triple Barrier Labels
-dt <- fread(triple_barrier_file)
-setDT(dt)  # Stelle sicher dass dt als data.table erkannt wird
+cat(sprintf("  Preisdaten geladen: %s Zeilen\n", format(nrow(dt_prices), big.mark = ",")))
+cat(sprintf("  Zeitraum: %s bis %s\n", min(dt_prices$datetime), max(dt_prices$datetime)))
+cat(sprintf("  Spalten: %s\n", paste(names(dt_prices), collapse = ", ")))
 
-cat(sprintf("Geladene Zeilen: %s\n", format(nrow(dt), big.mark = ",")))
-cat(sprintf("Zeitraum: %s bis %s\n", min(dt$datetime), max(dt$datetime)))
-cat(sprintf("Spalten: %s\n", paste(head(names(dt), 10), collapse = ", ")))
+# 2. Lade Labels (erstellt von 01_labelling_main_script.R)
+labels_file <- file.path(labelled_data_path, paste0(EPIC, "_", INTERVAL, "_labeled.csv"))
+cat(sprintf("\nLade Labels: %s\n", labels_file))
+dt_labels <- fread(labels_file)
+setDT(dt_labels)
+
+cat(sprintf("  Labels geladen: %s Zeilen\n", format(nrow(dt_labels), big.mark = ",")))
+cat(sprintf("  Label-Spalten: %s\n", paste(names(dt_labels), collapse = ", ")))
+
+# Label distribution
+cat("\n  Label Verteilung:\n")
+print(table(dt_labels$label))
+
+# 3. Verwende Preisdaten als Basis für Feature-Berechnung
+dt <- copy(dt_prices)
+
+cat("\n✓ Rohe Preisdaten bereit für Feature-Berechnung\n")
+cat(sprintf("  Anzahl Zeilen: %s\n", format(nrow(dt), big.mark = ",")))
 
 # Für schnellere Tests: Reduziere Datensatz (nur 2024-2025)
 USE_SMALL_DATASET <- FALSE  # Auf FALSE setzen für vollständige Analyse
 
 if (USE_SMALL_DATASET) {
-  dt_small <- dt[datetime >= "2024-01-01" & datetime <= "2025-12-31"]
-
   cat(sprintf("\n=== VERWENDE REDUZIERTES DATASET FÜR TESTS ===\n"))
-  cat(sprintf("Original: %s Zeilen\n", format(nrow(dt), big.mark = ",")))
-  cat(sprintf("Reduziert: %s Zeilen\n", format(nrow(dt_small), big.mark = ",")))
-  cat(sprintf("Faktor: %.1fx schneller\n\n", nrow(dt) / nrow(dt_small)))
+  cat(sprintf("Original Preisdaten: %s Zeilen\n", format(nrow(dt), big.mark = ",")))
 
-  dt <- dt_small
-  rm(dt_small)
+  # Filter Preisdaten
+  dt <- dt[datetime >= "2024-01-01" & datetime <= "2025-12-31"]
+
+  # Filter Labels entsprechend
+  dt_labels <- dt_labels[datetime >= "2024-01-01" & datetime <= "2025-12-31"]
+
+  cat(sprintf("Reduziert Preisdaten: %s Zeilen\n", format(nrow(dt), big.mark = ",")))
+  cat(sprintf("Reduziert Labels: %s Zeilen\n\n", format(nrow(dt_labels), big.mark = ",")))
 }
 
 # ===== Load Pipeline Modules ==================================================
@@ -126,7 +138,7 @@ dt_indicators <- calculate_all_indicators(
   verbose = TRUE
 )
 toc()
-
+#View(dt_indicators)
 cat(sprintf("Features nach Indikator-Berechnung: %d\n", ncol(dt_indicators)))
 
 # ===== Step 2: Feature Engineering (Lags, Derivatives) =======================
@@ -154,6 +166,43 @@ n_after <- nrow(dt_features)
 cat(sprintf("Zeilen nach NA-Entfernung: %s (-%s)\n",
             format(n_after, big.mark = ","),
             format(n_before - n_after, big.mark = ",")))
+
+# ===== STEP 2b: Merge Labels with Features ===================================
+
+cat("\n=== STEP 2b: MERGE LABELS MIT FEATURES ===\n")
+
+cat(sprintf("Features vor Merge: %s Zeilen\n", format(nrow(dt_features), big.mark = ",")))
+cat(sprintf("Labels vor Merge: %s Zeilen\n", format(nrow(dt_labels), big.mark = ",")))
+
+# Merge basierend auf datetime
+# Wichtig: Nur Label-spezifische Spalten aus dt_labels nehmen
+label_cols <- c("datetime", "label", "sample_weight", "barrier_touched",
+                "bars_to_exit", "realized_return", "n_concurrent")
+
+# Prüfe welche Spalten tatsächlich vorhanden sind
+available_label_cols <- intersect(label_cols, names(dt_labels))
+cat(sprintf("Verfügbare Label-Spalten: %s\n", paste(available_label_cols, collapse = ", ")))
+
+# Merge
+dt_features <- merge(
+  dt_features,
+  dt_labels[, ..available_label_cols],
+  by = "datetime",
+  all.x = FALSE,  # Nur Zeilen behalten die in beiden vorhanden sind
+  all.y = FALSE
+)
+
+cat(sprintf("Features nach Merge: %s Zeilen\n", format(nrow(dt_features), big.mark = ",")))
+cat(sprintf("Spalten nach Merge: %d\n", ncol(dt_features)))
+
+# Prüfe ob Labels erfolgreich gemerged wurden
+if (!"label" %in% names(dt_features)) {
+  stop("FEHLER: Labels konnten nicht gemerged werden!")
+}
+
+cat("\n✓ Labels erfolgreich mit Features gemerged\n")
+cat("  Label Verteilung nach Merge:\n")
+print(table(dt_features$label))
 
 # ===== LONG/SHORT SPLIT =======================================================
 
