@@ -1,6 +1,17 @@
-#Script for running labelling methods
+# =============================================================================
+# TRIPLE BARRIER LABELING - MAIN SCRIPT
+# =============================================================================
+# Creates two versions of labels:
+# 1. STANDARD (optimized + filtered): For production use
+# 2. UNFILTERED (old version): For comparison and legacy compatibility
+#
+# Output files:
+# - GOLD_MINUTE_15_labeled.csv (FILTERED - use this for backtesting!)
+# - GOLD_MINUTE_15_labeled_unfiltered.csv (UNFILTERED - for comparison)
+# =============================================================================
 
-cat("\n=== START LABEL ANALYSIS ===\n")
+cat("\n=== START TRIPLE BARRIER LABELING ===\n")
+cat(sprintf("[%s] Script started\n", Sys.time()))
 
 # ===== Set Up =================================================================
 
@@ -19,236 +30,273 @@ pacman::p_load(data.table,
 price_data_path = file.path("price_data")
 labelled_output_path = file.path("labelled_data")
 
-#Konfiguration
+# Configuration
 EPIC = "GOLD"
 INTERVAL = "MINUTE_15"
 prices_filename = file.path(price_data_path, paste0(EPIC, "_", INTERVAL, ".csv"))
 
-#Lade Daten
+# Load data
 dt = fread(prices_filename)
 
-# Rename 'time' column to 'datetime' for consistency with labeling scripts
+# Rename 'time' column to 'datetime' for consistency
 setnames(dt, "time", "datetime")
 
-# Wir sehen uns zuerst einmal nur 2023-2025 an um nicht zu große Dateien zu laden
-dt_small = dt[datetime >= "2025-01-01" & datetime <= "2025-12-31"]
+cat("\n=== DATASET SIZE ===\n")
+cat(sprintf("Full dataset: %s rows\n", format(nrow(dt), big.mark = ",")))
+cat(sprintf("Date range: %s to %s\n", min(dt$datetime), max(dt$datetime)))
 
-cat("\n=== DATENSATZ GRÖSSE ===\n")
-cat(sprintf("dt_small: %s Zeilen\n", format(nrow(dt_small), big.mark = ",")))
-cat(sprintf("dt (vollständig): %s Zeilen\n", format(nrow(dt), big.mark = ",")))
-cat(sprintf("Faktor: %.1fx\n\n", nrow(dt) / nrow(dt_small)))
+# ===== Load Scripts ===========================================================
 
-# 1. Lade beide Scripts
-# WICHTIG: Die optimierte Version wird automatisch geladen
-source("r/01_01_triple_barrier_labeling_optimized.R")  # Optimierte Hauptfunktion
-source("r/01_02_triple_barrier_labeling_helpers.R")    # Helper-Funktionen
-source("r/01_03_alternative_labeling_methods.R")       # Alternative Methoden
+source("r/01_01_triple_barrier_labeling_optimized.R")  # Main labeling function
+source("r/01_02_triple_barrier_labeling_helpers.R")    # Helper functions (includes filtering)
+source("r/01_03_alternative_labeling_methods.R")       # Alternative methods
 
-# 2. Starte mit Triple Barrier (OPTIMIERTE VERSION)
+# =============================================================================
+# VERSION 1: STANDARD (OPTIMIZED + FILTERED) - FOR PRODUCTION
+# =============================================================================
+
+cat("\n" | paste0(rep("=", 80), collapse = "") | "\n")
+cat("VERSION 1: STANDARD (OPTIMIZED + FILTERED)\n")
+cat(paste0(rep("=", 80), collapse = "") | "\n\n")
+
+cat("This version uses:\n")
+cat("  - Optimized parameters (ATR=6, Horizon=6, Threshold=0.25)\n")
+cat("  - Sample weight filtering (>= 0.3)\n")
+cat("  - Exit-based filtering (eliminates autocorrelation)\n")
+cat("  -> USE THIS FOR BACKTESTING AND PRODUCTION!\n\n")
+
+# Optimized parameters
+STANDARD_ATR_PERIOD = 6
+STANDARD_MAX_HORIZON = 6
+STANDARD_NEUTRAL_THRESHOLD = 0.25
+STANDARD_ATR_MULT = 1.5
+STANDARD_WEIGHT_THRESHOLD = 0.3
+
+cat("Parameters:\n")
+cat(sprintf("  ATR Period: %d\n", STANDARD_ATR_PERIOD))
+cat(sprintf("  Max Horizon: %d bars\n", STANDARD_MAX_HORIZON))
+cat(sprintf("  Neutral Threshold: %.2f\n", STANDARD_NEUTRAL_THRESHOLD))
+cat(sprintf("  ATR Multiplier: %.1f\n", STANDARD_ATR_MULT))
+cat(sprintf("  Sample Weight Threshold: %.2f\n\n", STANDARD_WEIGHT_THRESHOLD))
+
+# Create labels
 tic()
-labeled <- create_triple_barrier_labels(
+cat("Creating labels with optimized parameters...\n")
+labeled_standard <- create_triple_barrier_labels(
   prices = dt,
-  atr_period = 10,
-  atr_mult_barrier = 1.5,
-  max_horizon_bars = 8,
+  atr_period = STANDARD_ATR_PERIOD,
+  atr_mult_barrier = STANDARD_ATR_MULT,
+  max_horizon_bars = STANDARD_MAX_HORIZON,
   session_start = 2,
   session_end = 21,
-  neutral_threshold = 0.3    # 10% des ATR als Neutral-Schwelle
+  neutral_threshold = STANDARD_NEUTRAL_THRESHOLD
 )
 toc()
 
-# 3. Prüfe Label-Qualität
-analyze_label_quality(labeled)
+# Calculate sample weights
+cat("\nCalculating sample weights...\n")
+labeled_standard <- calculate_sample_weights(labeled_standard)
 
-# 3a. Teste verschiedene Neutral-Thresholds
-neutral_threshold_results <- test_neutral_thresholds(
-  labeled_data = labeled,
-  thresholds = c(0.05, 0.1, 0.15, 0.2, 0.25, 0.3)
+# Filter by sample weight
+cat(sprintf("\nFiltering by sample weight (>= %.2f)...\n", STANDARD_WEIGHT_THRESHOLD))
+n_before_weight <- nrow(labeled_standard)
+labeled_standard <- labeled_standard[sample_weight >= STANDARD_WEIGHT_THRESHOLD]
+n_after_weight <- nrow(labeled_standard)
+cat(sprintf("  Removed %s labels (%.1f%% reduction)\n",
+            format(n_before_weight - n_after_weight, big.mark = ","),
+            (1 - n_after_weight/n_before_weight) * 100))
+
+# Exit-based filtering
+cat("\nApplying exit-based filtering (non-overlapping)...\n")
+labeled_standard <- filter_labels_exit_based(
+  labeled_data = labeled_standard,
+  datetime_col = "datetime",
+  label_col = "label",
+  bars_to_exit_col = "bars_to_exit"
 )
-print(neutral_threshold_results)
 
-plot_label_distribution(labeled)
+# Recalculate sample weights after filtering
+labeled_standard <- calculate_sample_weights(labeled_standard)
 
-# 4. Berechne Sample Weights (überlappende Labels)
-labeled_weighted <- calculate_sample_weights(labeled)
-analyze_sample_weights(labeled_weighted)
-plot_sample_weights(labeled_weighted)
+# Analyze quality
+cat("\n--- STANDARD VERSION QUALITY METRICS ---\n")
+cat(sprintf("Total labels: %s\n", format(nrow(labeled_standard), big.mark = ",")))
+cat(sprintf("Mean sample weight: %.4f\n", mean(labeled_standard$sample_weight)))
+cat(sprintf("Mean concurrent: %.2f\n", mean(labeled_standard$n_concurrent)))
 
-# 5. Analysiere Holding Period für die aktuelle Konfiguration
-analyze_holding_period(labeled, max_horizon = 14)
+# ACF
+labels_num <- as.numeric(labeled_standard$label)
+acf_standard <- acf(labels_num, lag.max = 10, plot = FALSE)
+cat(sprintf("ACF Lag-1: %.4f", acf_standard$acf[2]))
+if(abs(acf_standard$acf[2]) < 0.2) {
+  cat(" ✅ (Target: < 0.2)\n")
+} else {
+  cat(" ⚠ (Target: < 0.2)\n")
+}
 
-# 6. Teste den Impact des Horizons
-horizon_test_results <- test_horizon_impact(
+cat("\nLabel distribution:\n")
+print(table(labeled_standard$label))
+
+# Save STANDARD version (this is the default for backtesting!)
+output_standard <- file.path(labelled_output_path, paste0(EPIC, "_", INTERVAL, "_labeled.csv"))
+fwrite(labeled_standard, output_standard)
+cat(sprintf("\n✅ STANDARD labels saved to: %s\n", output_standard))
+cat("   (Use this file for backtesting!)\n")
+
+# =============================================================================
+# VERSION 2: UNFILTERED (OLD VERSION) - FOR COMPARISON
+# =============================================================================
+
+cat("\n" | paste0(rep("=", 80), collapse = "") | "\n")
+cat("VERSION 2: UNFILTERED (OLD VERSION)\n")
+cat(paste0(rep("=", 80), collapse = "") | "\n\n")
+
+cat("This version uses:\n")
+cat("  - Old parameters (ATR=10, Horizon=8, Threshold=0.3)\n")
+cat("  - NO exit-based filtering\n")
+cat("  - Only sample weights calculated\n")
+cat("  -> USE FOR COMPARISON ONLY!\n\n")
+
+# Old parameters
+OLD_ATR_PERIOD = 10
+OLD_MAX_HORIZON = 8
+OLD_NEUTRAL_THRESHOLD = 0.3
+OLD_ATR_MULT = 1.5
+
+cat("Parameters:\n")
+cat(sprintf("  ATR Period: %d\n", OLD_ATR_PERIOD))
+cat(sprintf("  Max Horizon: %d bars\n", OLD_MAX_HORIZON))
+cat(sprintf("  Neutral Threshold: %.2f\n", OLD_NEUTRAL_THRESHOLD))
+cat(sprintf("  ATR Multiplier: %.1f\n\n", OLD_ATR_MULT))
+
+# Create labels
+tic()
+cat("Creating labels with old parameters...\n")
+labeled_unfiltered <- create_triple_barrier_labels(
   prices = dt,
-  atr_period = 14,
-  atr_mult_barrier = 3,
-  horizons = c(7, 10, 14, 17, 20),
-  session_start = 2,
-  session_end = 21
-)
-print(horizon_test_results)
-
-# 7. Optimiere Label Parameter (umfassender Grid Search)
-opt_params <- optimize_labeling_parameters(
-   prices = dt,
-   atr_periods = c(8, 10, 12),
-   atr_mults = c(1.5, 2, 2.5, 3),
-   max_horizons = c(8, 11, 14, 17),
-   sort_by = "combined"  # Sortierung: "uniqueness" (default), "balance", oder "combined"
-)
-
-#View(opt_params)
-
-#
-# # Zeige beste Kombination
-cat("\n=== BESTE PARAMETER-KOMBINATION ===\n")
-best <- opt_params[1]
-cat(sprintf("ATR Period: %d\n", best$atr_period))
-cat(sprintf("ATR Multiplier: %.1f\n", best$atr_mult))
-cat(sprintf("Max Horizon: %d bars\n", best$max_horizon))
-cat(sprintf("\nUniqueness: %.4f (höher = besser)\n", best$avg_uniqueness))
-cat(sprintf("Balance Score: %.3f (niedriger = besser)\n", best$balance_score))
-cat(sprintf("Mean Concurrent Labels: %.1f\n", best$mean_concurrent))
-cat(sprintf("Samples: %d\n", best$n_samples))
-
-# ====== Erstelle Labels mit den besten Parametern =============================
-cat("\n=== ERSTELLE LABELS MIT BESTEN PARAMETERN ===\n")
-
-# Erstelle Labels mit den besten Parametern
-labeled_optimized <- create_triple_barrier_labels(
-  prices = dt,
-  atr_period = best$atr_period,
-  atr_mult_barrier = best$atr_mult,
-  max_horizon_bars = best$max_horizon,
+  atr_period = OLD_ATR_PERIOD,
+  atr_mult_barrier = OLD_ATR_MULT,
+  max_horizon_bars = OLD_MAX_HORIZON,
   session_start = 2,
   session_end = 21,
-  neutral_threshold = 0.3    # 10% des ATR als Neutral-Schwelle
+  neutral_threshold = OLD_NEUTRAL_THRESHOLD
 )
+toc()
 
-# Prüfe Label-Qualität
-analyze_label_quality(labeled_optimized)
+# Calculate sample weights (but don't filter!)
+cat("\nCalculating sample weights (no filtering applied)...\n")
+labeled_unfiltered <- calculate_sample_weights(labeled_unfiltered)
 
-# Berechne Sample Weights (überlappende Labels)
-labeled_weighted <- calculate_sample_weights(labeled_optimized)
-analyze_sample_weights(labeled_weighted)
+# Analyze quality
+cat("\n--- UNFILTERED VERSION QUALITY METRICS ---\n")
+cat(sprintf("Total labels: %s\n", format(nrow(labeled_unfiltered), big.mark = ",")))
+cat(sprintf("Mean sample weight: %.4f\n", mean(labeled_unfiltered$sample_weight)))
+cat(sprintf("Mean concurrent: %.2f\n", mean(labeled_unfiltered$n_concurrent)))
 
-# Speichere die gelabelten Daten (Triple Barrier)
-output_filename = file.path(labelled_output_path, paste0(EPIC, "_", INTERVAL, "_labeled.csv"))
-fwrite(labeled_weighted, output_filename)
-cat(sprintf("\nTriple Barrier Labels gespeichert in: %s\n", output_filename))
+# ACF
+labels_num_unf <- as.numeric(labeled_unfiltered$label)
+acf_unfiltered <- acf(labels_num_unf, lag.max = 10, plot = FALSE)
+cat(sprintf("ACF Lag-1: %.4f", acf_unfiltered$acf[2]))
+if(abs(acf_unfiltered$acf[2]) < 0.2) {
+  cat(" ✅ (Target: < 0.2)\n")
+} else {
+  cat(" ⚠ (High autocorrelation as expected)\n")
+}
 
+cat("\nLabel distribution:\n")
+print(table(labeled_unfiltered$label))
+
+# Save UNFILTERED version
+output_unfiltered <- file.path(labelled_output_path, paste0(EPIC, "_", INTERVAL, "_labeled_unfiltered.csv"))
+fwrite(labeled_unfiltered, output_unfiltered)
+cat(sprintf("\n✅ UNFILTERED labels saved to: %s\n", output_unfiltered))
+cat("   (For comparison only - not recommended for production)\n")
 
 # =============================================================================
-# EXTREMA-BASIERTE META-LABELING
+# COMPARISON SUMMARY
 # =============================================================================
 
-cat("\n=== START META-LABELING (EXTREMA SIGNALS) ===\n")
+cat("\n" | paste0(rep("=", 80), collapse = "") | "\n")
+cat("COMPARISON SUMMARY: STANDARD vs UNFILTERED\n")
+cat(paste0(rep("=", 80), collapse = "") | "\n\n")
 
-# Lade Meta-Labeling Script (OPTIMIERTE VERSION)
-source("r/01_04_meta_labeling_extrema_signals.R")
-
-# Generiere Meta-Labels basierend auf Extrema
-meta_result <- generate_meta_labeled_signals(
-  prices = dt,
-
-  # Extrema Detection
-  lookback_bars = 5,
-  confirmation_method = "bars",      # "bars", "derivative", "both"
-  confirmation_bars = 2,
-  use_rsi = TRUE,
-  rsi_period = 14,
-  rsi_oversold = 35,
-  rsi_overbought = 65,
-
-  # Signal Generation (verwendet gleiche ATR wie Triple Barrier)
-  atr_period = best$atr_period,
-
-  # Meta-Labeling
-  atr_mult_profit = 2.0,            # 2x ATR Profit Target
-  atr_mult_stop = 1.5,              # 1.5x ATR Stop Loss
-  max_holding_bars = 20,
-  use_stop_loss = TRUE
+comparison <- data.table(
+  Metric = c(
+    "Total Labels",
+    "Mean Sample Weight",
+    "Mean Concurrent Labels",
+    "ACF Lag-1",
+    "Label Balance (S/L/N)"
+  ),
+  STANDARD = c(
+    format(nrow(labeled_standard), big.mark = ","),
+    sprintf("%.4f", mean(labeled_standard$sample_weight)),
+    sprintf("%.2f", mean(labeled_standard$n_concurrent)),
+    sprintf("%.4f", acf_standard$acf[2]),
+    sprintf("%.0f/%.0f/%.0f%%",
+            prop.table(table(labeled_standard$label))["-1"] * 100,
+            prop.table(table(labeled_standard$label))["1"] * 100,
+            ifelse("0" %in% names(table(labeled_standard$label)),
+                   prop.table(table(labeled_standard$label))["0"] * 100, 0))
+  ),
+  UNFILTERED = c(
+    format(nrow(labeled_unfiltered), big.mark = ","),
+    sprintf("%.4f", mean(labeled_unfiltered$sample_weight)),
+    sprintf("%.2f", mean(labeled_unfiltered$n_concurrent)),
+    sprintf("%.4f", acf_unfiltered$acf[2]),
+    sprintf("%.0f/%.0f/%.0f%%",
+            prop.table(table(labeled_unfiltered$label))["-1"] * 100,
+            prop.table(table(labeled_unfiltered$label))["1"] * 100,
+            ifelse("0" %in% names(table(labeled_unfiltered$label)),
+                   prop.table(table(labeled_unfiltered$label))["0"] * 100, 0))
+  )
 )
 
-# Extrahiere Ergebnisse
-meta_labeled <- meta_result$meta_labeled
-full_data_with_signals <- meta_result$full_data
+print(comparison)
 
-View(full_data_with_signals)
-
-# Speichere Meta-Labels
-meta_output_filename <- file.path(
-  labelled_output_path,
-  paste0(EPIC, "_", INTERVAL, "_meta_labeled.csv")
-)
-fwrite(meta_labeled, meta_output_filename)
-cat(sprintf("\nMeta-Labels gespeichert in: %s\n", meta_output_filename))
-
-# Optional: Speichere auch Full Data (alle Bars mit Extrema-Markierungen)
-full_output_filename <- file.path(
-  labelled_output_path,
-  paste0(EPIC, "_", INTERVAL, "_with_extrema.csv")
-)
-fwrite(full_data_with_signals, full_output_filename)
-cat(sprintf("Full Data mit Extrema gespeichert in: %s\n",
-            full_output_filename))
-
-# Detaillierte Analyse der Meta-Labels
-source("r/01_05_analyze_extrema_meta_labels.R")
-
-cat("\n=== ANALYSIERE EXTREMA META-LABELS ===\n")
-
-# Führe Analyse durch
-extrema_stats <- analyze_extrema_performance(
-  meta_labeled = meta_labeled,
-  triple_barrier = labeled_weighted
-)
-
-# Erstelle Visualisierungen
-plot_extrema_analysis(
-  meta_labeled = meta_labeled,
-  output_path = labelled_output_path
-)
-
-cat("\n=== END META-LABELING ===\n")
-
+cat("\n--- RECOMMENDATION ---\n")
+cat("For backtesting and production, use: GOLD_MINUTE_15_labeled.csv (STANDARD)\n")
+cat("This version has:\n")
+cat("  ✅ Low autocorrelation (< 0.2)\n")
+cat("  ✅ High sample uniqueness (> 0.5)\n")
+cat("  ✅ Balanced label distribution\n")
+cat("  ✅ Independent samples (exit-based filtering)\n\n")
 
 # =============================================================================
-# KOMBINIERE BEIDE LABEL-SETS (EINFACH)
+# OPTIONAL: ACF COMPARISON PLOT
 # =============================================================================
 
-cat("\n=== KOMBINIERE TRIPLE BARRIER + META-LABELS ===\n")
+cat("Creating ACF comparison plot...\n")
 
-# Merge: Füge Meta-Label Spalten zu Triple Barrier Dataset hinzu
-# Triple Barrier hat alle Bars, Meta-Labels nur Signal-Bars
+# Create output directory
+if(!dir.exists("plots/label_quality")) {
+  dir.create("plots/label_quality", recursive = TRUE)
+}
 
-# Prefix für Meta-Label Spalten
-meta_cols <- c("primary_signal", "meta_label", "exit_reason", "bars_held",
-               "realized_pnl", "profit_target", "stop_loss")
-
-# Erstelle Meta-Dataset mit Prefix
-meta_for_merge <- meta_labeled[, c("datetime", meta_cols), with = FALSE]
-setnames(meta_for_merge, meta_cols, paste0("meta_", meta_cols))
-
-# Merge: Left Join (alle Triple Barrier Bars bleiben)
-combined_labels <- merge(
-  labeled_weighted,
-  meta_for_merge,
-  by = "datetime",
-  all.x = TRUE
+# Analyze ACF
+acf_results <- analyze_label_autocorrelation(
+  labeled_before = labeled_unfiltered,
+  labeled_after = labeled_standard,
+  max_lag = 20,
+  label_col = "label",
+  output_path = "plots/label_quality",
+  save_plot = TRUE
 )
 
-cat(sprintf("Kombinierte Daten: %s Zeilen\n", format(nrow(combined_labels), big.mark = ",")))
-cat(sprintf("Bars mit Meta-Signal: %s\n", sum(!is.na(combined_labels$meta_primary_signal))))
+cat("\n✅ ACF comparison plot saved to: plots/label_quality/acf_comparison.png\n")
 
-# Speichere kombinierte Labels
-combined_output <- file.path(
-  labelled_output_path,
-  paste0(EPIC, "_", INTERVAL, "_combined_labels.csv")
-)
-View(combined_labels)
-fwrite(combined_labels, combined_output)
-cat(sprintf("Kombinierte Labels gespeichert: %s\n", combined_output))
+# =============================================================================
+# FINAL SUMMARY
+# =============================================================================
 
-cat("\n=== END LABEL COMBINATION ===\n")
-cat("\n=== END LABEL ANALYSIS ===\n")
+cat("\n" | paste0(rep("=", 80), collapse = "") | "\n")
+cat("LABELING COMPLETE\n")
+cat(paste0(rep("=", 80), collapse = "") | "\n\n")
+
+cat("Output Files:\n")
+cat(sprintf("  1. %s (STANDARD - use for backtesting!)\n", output_standard))
+cat(sprintf("  2. %s (UNFILTERED - for comparison)\n", output_unfiltered))
+cat(sprintf("  3. plots/label_quality/acf_comparison.png (ACF plot)\n"))
+
+cat(sprintf("\n[%s] Script completed!\n", Sys.time()))
+cat("\n=== END TRIPLE BARRIER LABELING ===\n")

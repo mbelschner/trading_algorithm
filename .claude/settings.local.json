@@ -8,7 +8,13 @@
       "Bash(Rscript:*)",
       "Bash(del \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\r\\\\03_integrated_triple_barrier_metalabeling.R\" \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\r\\\\run_integrated_pipeline.R\" \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\INTEGRATED_PIPELINE_GUIDE.md\")",
       "Bash(where Rscript)",
-      "Bash(del \"02_meta_labeling_extrema_signals.R\" \"03_combine_triple_barrier_and_meta_labels.R\" \"benchmark_meta_labeling.R\" \"test_meta_labeling.R\" \"old_01_labelling_triplebarrier_method.R\" \"old_02_feature_engineering.R\")"
+      "Bash(del \"02_meta_labeling_extrema_signals.R\" \"03_combine_triple_barrier_and_meta_labels.R\" \"benchmark_meta_labeling.R\" \"test_meta_labeling.R\" \"old_01_labelling_triplebarrier_method.R\" \"old_02_feature_engineering.R\")",
+      "Bash(del \"r\\\\test_exit_based_filtering.R\")",
+      "Bash(pandoc:*)",
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Bash(del nul)",
+      "Bash(rm:*)"
     ]
   }
 }

@@ -870,6 +870,221 @@ plot_holding_period_analysis <- function(labeled_data, max_horizon) {
 }
 
 
+# =============================================================================
+# EXIT-BASED LABEL FILTERING (REMOVE OVERLAPS)
+# =============================================================================
+# Goal: Create non-overlapping labels by greedy selection
+# Method: Select first label, wait until its exit, then select next label
+# Benefits: Eliminates autocorrelation, creates truly independent samples
+
+filter_labels_exit_based <- function(labeled_data,
+                                     datetime_col = "datetime",
+                                     label_col = "label",
+                                     bars_to_exit_col = "bars_to_exit") {
+
+  cat("\n=== EXIT-BASED LABEL FILTERING ===\n")
+  cat(sprintf("[%s] Starting filtering process...\n", Sys.time()))
+
+  # Validate inputs
+  if(!datetime_col %in% names(labeled_data)) {
+    stop(sprintf("Column '%s' not found in data", datetime_col))
+  }
+  if(!bars_to_exit_col %in% names(labeled_data)) {
+    stop(sprintf("Column '%s' not found in data", bars_to_exit_col))
+  }
+
+  dt <- copy(labeled_data)
+  n_original <- nrow(dt)
+
+  # Sort by datetime (ascending)
+  setorderv(dt, datetime_col)
+
+  # Calculate exit times
+  dt[, entry_time := get(datetime_col)]
+  dt[, exit_time := get(datetime_col) + get(bars_to_exit_col) * 15 * 60]
+
+  cat(sprintf("Original labels: %s\n", format(n_original, big.mark = ",")))
+  cat("Applying greedy selection (first label, wait for exit, next label)...\n")
+
+  # Greedy selection algorithm
+  selected_indices <- integer()
+  current_exit_time <- as.POSIXct("1900-01-01", tz = "UTC")
+
+  for(i in 1:nrow(dt)) {
+    entry <- dt$entry_time[i]
+
+    # Can we enter? Only if current time >= last exit time
+    if(entry >= current_exit_time) {
+      selected_indices <- c(selected_indices, i)
+      current_exit_time <- dt$exit_time[i]
+    }
+  }
+
+  # Filter to selected labels only
+  dt_filtered <- dt[selected_indices]
+  n_filtered <- nrow(dt_filtered)
+
+  # Remove temporary columns
+  dt_filtered[, entry_time := NULL]
+  dt_filtered[, exit_time := NULL]
+
+  # Statistics
+  reduction_pct <- (1 - n_filtered/n_original) * 100
+
+  cat(sprintf("\n=== FILTERING RESULTS ===\n"))
+  cat(sprintf("Original labels: %s\n", format(n_original, big.mark = ",")))
+  cat(sprintf("Filtered labels: %s\n", format(n_filtered, big.mark = ",")))
+  cat(sprintf("Reduction: %.1f%%\n", reduction_pct))
+  cat(sprintf("Retention: %.1f%%\n", 100 - reduction_pct))
+
+  # Label distribution before/after
+  cat("\n=== LABEL DISTRIBUTION ===\n")
+  cat("BEFORE filtering:\n")
+  dist_before <- table(labeled_data[[label_col]])
+  for(lbl in names(dist_before)) {
+    pct <- dist_before[lbl] / n_original * 100
+    cat(sprintf("  Label %s: %d (%.1f%%)\n", lbl, dist_before[lbl], pct))
+  }
+
+  cat("\nAFTER filtering:\n")
+  dist_after <- table(dt_filtered[[label_col]])
+  for(lbl in names(dist_after)) {
+    pct <- dist_after[lbl] / n_filtered * 100
+    cat(sprintf("  Label %s: %d (%.1f%%)\n", lbl, dist_after[lbl], pct))
+  }
+
+  cat(sprintf("\n[%s] Filtering complete!\n", Sys.time()))
+
+  return(dt_filtered)
+}
+
+
+# =============================================================================
+# AUTOCORRELATION ANALYSIS & COMPARISON
+# =============================================================================
+# Analyzes autocorrelation before/after filtering and creates comparison plots
+
+analyze_label_autocorrelation <- function(labeled_before,
+                                         labeled_after = NULL,
+                                         max_lag = 20,
+                                         label_col = "label",
+                                         output_path = "plots/label_quality",
+                                         save_plot = TRUE) {
+
+  cat("\n=== LABEL AUTOCORRELATION ANALYSIS ===\n")
+
+  # Convert labels to numeric
+  labels_before <- as.numeric(labeled_before[[label_col]])
+
+  # Remove NAs
+  labels_before <- na.omit(labels_before)
+
+  if(length(labels_before) < max_lag + 1) {
+    stop("Not enough labels for ACF analysis")
+  }
+
+  # Calculate ACF
+  acf_before <- acf(labels_before, lag.max = max_lag, plot = FALSE)
+  acf_vals_before <- as.numeric(acf_before$acf[-1])  # Remove lag 0
+
+  # Create results data.table
+  results <- data.table(
+    lag = 1:max_lag,
+    acf_before = acf_vals_before
+  )
+
+  # Statistics
+  cat("\n=== ACF STATISTICS (BEFORE) ===\n")
+  cat(sprintf("ACF Lag-1:  %.4f\n", acf_vals_before[1]))
+  cat(sprintf("ACF Lag-5:  %.4f\n", acf_vals_before[5]))
+  cat(sprintf("ACF Lag-10: %.4f\n", acf_vals_before[10]))
+  cat(sprintf("Mean ACF (Lag 1-10): %.4f\n", mean(acf_vals_before[1:10])))
+
+  # If we have "after" data, compare
+  if(!is.null(labeled_after)) {
+    labels_after <- as.numeric(labeled_after[[label_col]])
+    labels_after <- na.omit(labels_after)
+
+    if(length(labels_after) >= max_lag + 1) {
+      acf_after <- acf(labels_after, lag.max = max_lag, plot = FALSE)
+      acf_vals_after <- as.numeric(acf_after$acf[-1])
+      results[, acf_after := acf_vals_after]
+
+      cat("\n=== ACF STATISTICS (AFTER) ===\n")
+      cat(sprintf("ACF Lag-1:  %.4f\n", acf_vals_after[1]))
+      cat(sprintf("ACF Lag-5:  %.4f\n", acf_vals_after[5]))
+      cat(sprintf("ACF Lag-10: %.4f\n", acf_vals_after[10]))
+      cat(sprintf("Mean ACF (Lag 1-10): %.4f\n", mean(acf_vals_after[1:10])))
+
+      cat("\n=== IMPROVEMENT ===\n")
+      cat(sprintf("Lag-1 reduction:  %.4f -> %.4f (%.1f%%)\n",
+                  acf_vals_before[1], acf_vals_after[1],
+                  (1 - acf_vals_after[1]/acf_vals_before[1]) * 100))
+      cat(sprintf("Mean ACF reduction: %.4f -> %.4f (%.1f%%)\n",
+                  mean(acf_vals_before[1:10]), mean(acf_vals_after[1:10]),
+                  (1 - mean(acf_vals_after[1:10])/mean(acf_vals_before[1:10])) * 100))
+    }
+  }
+
+  # Create plot
+  if(save_plot && !is.null(labeled_after) && "acf_after" %in% names(results)) {
+
+    # Create output directory if needed
+    if(!dir.exists(output_path)) {
+      dir.create(output_path, recursive = TRUE)
+      cat(sprintf("\nCreated directory: %s\n", output_path))
+    }
+
+    # Reshape for plotting
+    results_long <- melt(results, id.vars = "lag",
+                        measure.vars = c("acf_before", "acf_after"),
+                        variable.name = "dataset", value.name = "acf")
+
+    results_long[, dataset := ifelse(dataset == "acf_before",
+                                     "Before Filtering", "After Filtering")]
+
+    # Significance bounds (95% confidence)
+    n_before <- length(labels_before)
+    n_after <- length(labels_after)
+    ci_before <- qnorm(0.975) / sqrt(n_before)
+    ci_after <- qnorm(0.975) / sqrt(n_after)
+
+    # Create plot
+    p <- ggplot(results_long, aes(x = lag, y = acf, color = dataset, group = dataset)) +
+      geom_line(size = 1) +
+      geom_point(size = 2) +
+      geom_hline(yintercept = 0, linetype = "solid", color = "black") +
+      geom_hline(yintercept = c(ci_before, -ci_before),
+                linetype = "dashed", color = "#E74C3C", alpha = 0.5) +
+      geom_hline(yintercept = c(ci_after, -ci_after),
+                linetype = "dashed", color = "#27AE60", alpha = 0.5) +
+      scale_color_manual(values = c("Before Filtering" = "#E74C3C",
+                                    "After Filtering" = "#27AE60")) +
+      labs(title = "Label Autocorrelation: Before vs After Exit-Based Filtering",
+           subtitle = sprintf("Dashed lines = 95%% confidence bounds (n_before=%s, n_after=%s)",
+                             format(n_before, big.mark = ","),
+                             format(n_after, big.mark = ",")),
+           x = "Lag",
+           y = "Autocorrelation",
+           color = "") +
+      theme_minimal() +
+      theme(plot.title = element_text(face = "bold", size = 14),
+            plot.subtitle = element_text(size = 10),
+            legend.position = "bottom")
+
+    # Save plot
+    output_file <- file.path(output_path, "acf_comparison.png")
+    ggsave(output_file, p, width = 10, height = 6, dpi = 300)
+    cat(sprintf("\nPlot saved: %s\n", output_file))
+
+    # Also print plot
+    print(p)
+  }
+
+  return(results)
+}
+
+
 cat("\n=== TRIPLE BARRIER LABELING SCRIPT GELADEN ===\n")
 cat("Verfügbare Funktionen:\n")
 cat("  - create_triple_barrier_labels(prices, ...)\n")
@@ -884,6 +1099,8 @@ cat("  - plot_horizon_impact(horizon_results)\n")
 cat("  - analyze_holding_period(labeled_data, max_horizon)\n")
 cat("  - plot_holding_period_analysis(labeled_data, max_horizon)\n")
 cat("  - optimize_labeling_parameters(prices, ...)\n")
+cat("  - filter_labels_exit_based(labeled_data) [NEW]\n")
+cat("  - analyze_label_autocorrelation(labeled_before, labeled_after) [NEW]\n")
 cat("\nBeispiel:\n")
 cat("  labeled <- create_triple_barrier_labels(gold_15min)\n")
 cat("  threshold_test <- test_neutral_thresholds(labeled, thresholds = c(0.05, 0.1, 0.15))\n")
@@ -891,3 +1108,5 @@ cat("  labeled_weighted <- calculate_sample_weights(labeled)\n")
 cat("  analyze_sample_weights(labeled_weighted)\n")
 cat("  horizon_test <- test_horizon_impact(gold_15min, horizons = c(8, 12, 16, 20, 24))\n")
 cat("  plot_horizon_impact(horizon_test)\n")
+cat("  labeled_clean <- filter_labels_exit_based(labeled_weighted)\n")
+cat("  acf_analysis <- analyze_label_autocorrelation(labeled_weighted, labeled_clean)\n")
