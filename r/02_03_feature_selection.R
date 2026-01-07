@@ -7,6 +7,7 @@
 #' @param dt data.table with features and labels
 #' @param target_col Name of target column (default: "label")
 #' @param weight_col Name of sample weight column (default: "sample_weight")
+#' @param feature_cols Optional vector of allowed feature columns (default: NULL, auto-detect)
 #' @param method Feature selection method: "xgboost", "ranger", "boruta" (default: "xgboost")
 #' @param n_top_features Number of top features to select (default: 25)
 #' @param cv_folds Number of CV folds for stability (default: 3)
@@ -17,6 +18,7 @@ select_important_features <- function(
     dt,
     target_col = "label",
     weight_col = "sample_weight",
+    feature_cols = NULL,
     method = "xgboost",
     n_top_features = 25,
     cv_folds = 3,
@@ -25,14 +27,23 @@ select_important_features <- function(
 
   if (verbose) cat(sprintf("\n=== Feature Selection (%s) ===\n", toupper(method)))
 
-  # Identifiziere Feature-Spalten (exkludiere Meta-Daten und OHLCV)
-  exclude_cols <- c("datetime", target_col, weight_col,
-                    "barrier_touched", "bars_to_exit", "realized_return",
-                    "upper_barrier", "lower_barrier", "effective_horizon",
-                    "open", "high", "low", "close", "volume",
-                    "label", "label_binary", "atr", "atr_pct", "hour", "date", "in_session")  # Exkludiere alle Label-Varianten und Meta-Daten
-  all_cols <- names(dt)
-  feature_cols <- setdiff(all_cols, exclude_cols)
+  # If feature_cols is provided, use it; otherwise auto-detect
+  if (is.null(feature_cols)) {
+    # Identifiziere Feature-Spalten (exkludiere Meta-Daten und OHLCV)
+    exclude_cols <- c("datetime", target_col, weight_col,
+                      "barrier_touched", "bars_to_exit", "realized_return",
+                      "upper_barrier", "lower_barrier", "effective_horizon",
+                      "open", "high", "low", "close", "volume",
+                      "label", "label_binary", "atr", "atr_pct", "hour", "date", "in_session")  # Exkludiere alle Label-Varianten und Meta-Daten
+    all_cols <- names(dt)
+    feature_cols <- setdiff(all_cols, exclude_cols)
+  } else {
+    # Filter feature_cols to only include columns that exist in dt
+    feature_cols <- intersect(feature_cols, names(dt))
+    if (verbose) {
+      cat(sprintf("Using provided feature list: %d features\n", length(feature_cols)))
+    }
+  }
 
   # Entferne nicht-numerische Features
   numeric_features <- feature_cols[sapply(dt[, ..feature_cols], is.numeric)]
