@@ -7,9 +7,12 @@
 # 2. Enhanced Neutral labels as default (configurable for RAW/STANDARD/UNFILTERED)
 # 3. Long model: Only label=1 (long) vs label=0 (neutral), SHORT LABELS FILTERED OUT
 # 4. Short model: Only label=-1 (short) vs label=0 (neutral), LONG LABELS FILTERED OUT
-# 5. Walk-Forward Feature Selection on 2019-2024 (both XGBoost + Boruta)
+# 5. Two-Stage Feature Selection:
+#    - Stage 1: Walk-Forward XGBoost (4 windows) → Top 50 stable features
+#    - Stage 2: Single Boruta run on full training period (2019-2024) → Top 15 final features
 # 6. 2025 as out-of-sample test set
 # 7. Confusion Matrix + Metrics for BOTH train and test sets
+# 8. Excluded features: Returns, ATR, Hour/Session (reserved for meta-labeling)
 #
 # ============================================================================
 
@@ -194,7 +197,7 @@ if (file.exists(features_cache_file) && !FORCE_RECALCULATE_FEATURES) {
     derivative_orders = c(1, 2),
     hourly_aggregation = TRUE,
     rolling_windows = c(10, 20, 50),
-    interaction_features = FALSE,
+    interaction_features = TRUE,
     verbose = TRUE
   )
   toc()
@@ -336,13 +339,10 @@ cat("\n")
 
 # ===== STEP 7a: WALK-FORWARD FEATURE SELECTION (LONG) ========================
 
-cat("\n=== STEP 7a: WALK-FORWARD FEATURE SELECTION (LONG MODEL) ===\n")
-cat("Strategy: Expanding Window Approach\n")
-cat("  Window 1: 2019-2020 train → 2021 validate\n")
-cat("  Window 2: 2019-2021 train → 2022 validate\n")
-cat("  Window 3: 2019-2022 train → 2023 validate\n")
-cat("  Window 4: 2019-2023 train → 2024 validate\n")
-cat("→ Features important in ALL windows = stable!\n\n")
+cat("\n=== STEP 7a: TWO-STAGE FEATURE SELECTION (LONG MODEL) ===\n")
+cat("Strategy: XGBoost Walk-Forward → Boruta Single Run\n")
+cat("  Stage 1: XGBoost on 4 expanding windows → 50 stable features\n")
+cat("  Stage 2: Boruta on full training period (2019-2024) → 15 final features\n\n")
 
 # Define walk-forward windows
 wf_windows <- list(
@@ -362,13 +362,7 @@ meta_cols <- c("datetime", "year", "label", "label_binary", "sample_weight",
 excluded_features <- c(
   # Return features (lookahead bias)
   "log_return", "realized_return", "realized_return_adj",
-  # ATR features (remove from primary model, can be used in meta-labeling)
-  "atr_14", "atr_28", "atr_14_pct", "atr_28_pct",
-  "atr_14_lag1", "atr_14_lag2", "atr_14_lag3", "atr_14_lag5",
-  "atr_28_lag1", "atr_28_lag2", "atr_28_lag3", "atr_28_lag5",
-  "atr_14_pct_lag1", "atr_14_pct_lag2", "atr_14_pct_lag3", "atr_14_pct_lag5",
-  "atr_28_pct_lag1", "atr_28_pct_lag2", "atr_28_pct_lag3", "atr_28_pct_lag5",
-  # Session/hour features (reserved for meta-labeling)
+   # Session/hour features (reserved for meta-labeling)
   "hour", "hour_sin", "hour_cos", "hour_open", "hour_high", "hour_low",
   "hour_close", "hour_volume", "hour_close_mean", "hour_close_sd",
   "session_london", "session_ny", "session_asia", "session_overlap"
@@ -449,82 +443,40 @@ if (length(stable_features_xgb) < 50) {
   stable_features_xgb <- names(sort(avg_ranks)[1:50])
 }
 
-cat(sprintf("✓ Stage 1 complete: %d features selected\n", length(stable_features_xgb)))
+cat(sprintf("✓ Stage 1 complete: %d stable features selected\n", length(stable_features_xgb)))
 
-# --- STAGE 2: Boruta Feature Selection (15 features) ---
+# --- STAGE 2: Boruta Feature Selection (ONCE on full training period) ---
 
-cat("\n--- STAGE 2: Boruta Walk-Forward Feature Selection ---\n")
-cat("Target: 15 stable features across all windows\n")
-cat(sprintf("Running on reduced dataset (%d features from XGBoost stage)\n\n",
-            length(stable_features_xgb)))
-
-boruta_feature_importance_list <- list()
+cat("\n--- STAGE 2: Boruta Feature Selection (Single Run) ---\n")
+cat("Strategy: Run Boruta ONCE on full training period (2019-2024)\n")
+cat(sprintf("Input: %d stable features from XGBoost stage\n", length(stable_features_xgb)))
+cat("Target: 15 final features\n\n")
 
 # Create reduced dataset with only XGBoost-selected features
 required_cols_boruta <- c("datetime", "year", "label_binary", "sample_weight")
 dt_train_long_reduced <- dt_train_long[, c(required_cols_boruta, stable_features_xgb), with = FALSE]
 
-for (i in seq_along(wf_windows)) {
-  window <- wf_windows[[i]]
-  cat(sprintf("\nWindow %d: Train %d-%d → Validate %d\n",
-              i, min(window$train_years), max(window$train_years), window$val_year))
+cat(sprintf("Running Boruta on full training set (%d-%d)...\n",
+            min(TRAIN_YEARS), max(TRAIN_YEARS)))
+cat(sprintf("  Training samples: %s\n", format(nrow(dt_train_long_reduced), big.mark = ",")))
+cat("  This will take a few minutes...\n\n")
 
-  # Split data for this window
-  dt_wf_train <- dt_train_long_reduced[year %in% window$train_years]
+# Run Boruta ONCE on full training data (2019-2024)
+tic()
+fs_result <- select_important_features(
+  dt = dt_train_long_reduced,
+  target_col = "label_binary",
+  weight_col = "sample_weight",
+  feature_cols = stable_features_xgb,  # Pass XGBoost-selected features
+  method = "boruta",
+  n_top_features = 15,
+  cv_folds = 1,
+  verbose = TRUE  # Show progress for this long-running operation
+)
+toc()
 
-  cat(sprintf("  Train: %s rows\n", format(nrow(dt_wf_train), big.mark = ",")))
-
-  # Run Boruta feature selection (stable_features_xgb already filtered)
-  tic()
-  fs_result <- select_important_features(
-    dt = dt_wf_train,
-    target_col = "label_binary",
-    weight_col = "sample_weight",
-    feature_cols = stable_features_xgb,  # Pass XGBoost-selected features
-    method = "boruta",
-    n_top_features = 15,
-    cv_folds = 1,
-    verbose = FALSE
-  )
-  toc()
-
-  # Store feature importance
-  boruta_feature_importance_list[[i]] <- fs_result$importance
-  cat(sprintf("  ✓ Top 15 features selected\n"))
-}
-
-# Find features that appear in ALL windows (stable features)
-cat("\n--- Identifying Stable Features (appear in ALL 4 windows) ---\n")
-
-# Get top 15 features from each window
-top_features_per_window_boruta <- lapply(boruta_feature_importance_list, function(imp) {
-  head(imp$feature, 15)
-})
-
-# Count how often each feature appears
-feature_counts_boruta <- table(unlist(top_features_per_window_boruta))
-stable_features_long <- names(feature_counts_boruta[feature_counts_boruta == length(wf_windows)])
-
-cat(sprintf("Stable features (in all %d windows): %d features\n",
-            length(wf_windows), length(stable_features_long)))
-
-if (length(stable_features_long) < 15) {
-  cat(sprintf("WARNING: Only %d stable features found. Taking top 15 by average rank...\n",
-              length(stable_features_long)))
-
-  # Fallback: Take top 15 by average rank across windows
-  all_features_boruta <- unique(unlist(top_features_per_window_boruta))
-  avg_ranks_boruta <- sapply(all_features_boruta, function(f) {
-    ranks <- sapply(boruta_feature_importance_list, function(imp) {
-      idx <- which(imp$feature == f)
-      if (length(idx) == 0) return(999)
-      return(idx)
-    })
-    mean(ranks)
-  })
-
-  stable_features_long <- names(sort(avg_ranks_boruta)[1:15])
-}
+# Extract top 15 features
+stable_features_long <- fs_result$top_features
 
 cat(sprintf("\n✓ Stage 2 complete: %d final features selected for LONG model\n",
             length(stable_features_long)))
@@ -684,8 +636,8 @@ cat("\n")
 
 # ===== STEP 7b: WALK-FORWARD FEATURE SELECTION (SHORT) =======================
 
-cat("\n=== STEP 7b: WALK-FORWARD FEATURE SELECTION (SHORT MODEL) ===\n")
-cat("Strategy: Expanding Window Approach (same as LONG)\n\n")
+cat("\n=== STEP 7b: TWO-STAGE FEATURE SELECTION (SHORT MODEL) ===\n")
+cat("Strategy: XGBoost Walk-Forward → Boruta Single Run (same as LONG)\n\n")
 
 # --- STAGE 1: XGBoost Feature Selection (50 features) ---
 
@@ -754,73 +706,39 @@ if (length(stable_features_xgb_short) < 50) {
   stable_features_xgb_short <- names(sort(avg_ranks_short)[1:50])
 }
 
-cat(sprintf("✓ Stage 1 complete: %d features selected\n", length(stable_features_xgb_short)))
+cat(sprintf("✓ Stage 1 complete: %d stable features selected\n", length(stable_features_xgb_short)))
 
-# --- STAGE 2: Boruta Feature Selection (15 features) ---
+# --- STAGE 2: Boruta Feature Selection (ONCE on full training period) ---
 
-cat("\n--- STAGE 2: Boruta Walk-Forward Feature Selection ---\n")
-cat("Target: 15 stable features across all windows\n")
-cat(sprintf("Running on reduced dataset (%d features from XGBoost stage)\n\n",
-            length(stable_features_xgb_short)))
+cat("\n--- STAGE 2: Boruta Feature Selection (Single Run) ---\n")
+cat("Strategy: Run Boruta ONCE on full training period (2019-2024)\n")
+cat(sprintf("Input: %d stable features from XGBoost stage\n", length(stable_features_xgb_short)))
+cat("Target: 15 final features\n\n")
 
-boruta_feature_importance_list_short <- list()
-
+# Create reduced dataset with only XGBoost-selected features
 dt_train_short_reduced <- dt_train_short[, c(required_cols_boruta, stable_features_xgb_short), with = FALSE]
 
-for (i in seq_along(wf_windows)) {
-  window <- wf_windows[[i]]
-  cat(sprintf("\nWindow %d: Train %d-%d → Validate %d\n",
-              i, min(window$train_years), max(window$train_years), window$val_year))
+cat(sprintf("Running Boruta on full training set (%d-%d)...\n",
+            min(TRAIN_YEARS), max(TRAIN_YEARS)))
+cat(sprintf("  Training samples: %s\n", format(nrow(dt_train_short_reduced), big.mark = ",")))
+cat("  This will take a few minutes...\n\n")
 
-  dt_wf_train <- dt_train_short_reduced[year %in% window$train_years]
-  cat(sprintf("  Train: %s rows\n", format(nrow(dt_wf_train), big.mark = ",")))
+# Run Boruta ONCE on full training data (2019-2024)
+tic()
+fs_result <- select_important_features(
+  dt = dt_train_short_reduced,
+  target_col = "label_binary",
+  weight_col = "sample_weight",
+  feature_cols = stable_features_xgb_short,  # Pass XGBoost-selected features
+  method = "boruta",
+  n_top_features = 15,
+  cv_folds = 1,
+  verbose = TRUE  # Show progress for this long-running operation
+)
+toc()
 
-  tic()
-  fs_result <- select_important_features(
-    dt = dt_wf_train,
-    target_col = "label_binary",
-    weight_col = "sample_weight",
-    feature_cols = stable_features_xgb_short,  # Pass XGBoost-selected features
-    method = "boruta",
-    n_top_features = 15,
-    cv_folds = 1,
-    verbose = FALSE
-  )
-  toc()
-
-  boruta_feature_importance_list_short[[i]] <- fs_result$importance
-  cat(sprintf("  ✓ Top 15 features selected\n"))
-}
-
-# Find stable features
-cat("\n--- Identifying Stable Features (appear in ALL 4 windows) ---\n")
-
-top_features_per_window_boruta_short <- lapply(boruta_feature_importance_list_short, function(imp) {
-  head(imp$feature, 15)
-})
-
-feature_counts_boruta_short <- table(unlist(top_features_per_window_boruta_short))
-stable_features_short <- names(feature_counts_boruta_short[feature_counts_boruta_short == length(wf_windows)])
-
-cat(sprintf("Stable features (in all %d windows): %d features\n",
-            length(wf_windows), length(stable_features_short)))
-
-if (length(stable_features_short) < 15) {
-  cat(sprintf("WARNING: Only %d stable features found. Taking top 15 by average rank...\n",
-              length(stable_features_short)))
-
-  all_features_boruta_short <- unique(unlist(top_features_per_window_boruta_short))
-  avg_ranks_boruta_short <- sapply(all_features_boruta_short, function(f) {
-    ranks <- sapply(boruta_feature_importance_list_short, function(imp) {
-      idx <- which(imp$feature == f)
-      if (length(idx) == 0) return(999)
-      return(idx)
-    })
-    mean(ranks)
-  })
-
-  stable_features_short <- names(sort(avg_ranks_boruta_short)[1:15])
-}
+# Extract top 15 features
+stable_features_short <- fs_result$top_features
 
 cat(sprintf("\n✓ Stage 2 complete: %d final features selected for SHORT model\n",
             length(stable_features_short)))
