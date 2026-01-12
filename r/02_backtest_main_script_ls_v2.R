@@ -65,6 +65,10 @@ INTERVAL <- "MINUTE_15"
 # Label version selection (configurable)
 LABEL_VERSION <- "enhanced_neutral"  # Options: "enhanced_neutral", "raw", "standard", "unfiltered"
 
+# Additional markets for feature analysis
+ADDITIONAL_MARKETS <- c("DXY", "VIX", "SILVER")  # Set to NULL or c() to disable
+ADDITIONAL_MARKETS_LAG_PERIODS <- c(1, 4, 8, 20)  # Lag periods for additional market features
+
 # Feature caching
 FORCE_RECALCULATE_FEATURES <- FALSE  # Set to TRUE if feature selection logic changed
 
@@ -76,6 +80,10 @@ cat(sprintf("\nConfiguration:\n"))
 cat(sprintf("  Label Version: %s\n", LABEL_VERSION))
 cat(sprintf("  Train Period: %d-%d\n", min(TRAIN_YEARS), max(TRAIN_YEARS)))
 cat(sprintf("  Test Period: %d\n", TEST_YEAR))
+if (!is.null(ADDITIONAL_MARKETS) && length(ADDITIONAL_MARKETS) > 0) {
+  cat(sprintf("  Additional Markets: %s\n", paste(ADDITIONAL_MARKETS, collapse = ", ")))
+  cat(sprintf("  Additional Markets Lag Periods: %s\n", paste(ADDITIONAL_MARKETS_LAG_PERIODS, collapse = ", ")))
+}
 
 # ===== STEP 1: LOAD RAW PRICE DATA ===========================================
 
@@ -139,6 +147,8 @@ cat("\n=== STEP 3: CALCULATE FEATURES ON ALL PRICE DATA ===\n")
 cat("\nLoading pipeline modules...\n")
 source("r/02_01_indicator_calculation.R")
 cat("✓ Indicator Calculation loaded\n")
+source("r/02_01b_additional_markets.R")
+cat("✓ Additional Markets module loaded\n")
 source("r/02_02_feature_engineering.R")
 cat("✓ Feature Engineering loaded\n")
 source("r/02_03_feature_selection.R")
@@ -204,12 +214,34 @@ if (file.exists(features_cache_file) && !FORCE_RECALCULATE_FEATURES) {
 
   cat(sprintf("Features after engineering: %d columns\n", ncol(dt_features_all)))
 
+  # === LOAD AND MERGE ADDITIONAL MARKETS ===
+  if (!is.null(ADDITIONAL_MARKETS) && length(ADDITIONAL_MARKETS) > 0) {
+    cat("\n=== LOADING ADDITIONAL MARKETS ===\n")
+
+    dt_additional_markets <- load_additional_markets(
+      markets = ADDITIONAL_MARKETS,
+      interval = INTERVAL,
+      price_data_path = price_data_path,
+      lag_periods = ADDITIONAL_MARKETS_LAG_PERIODS,
+      verbose = TRUE
+    )
+
+    # Merge with main features
+    if (!is.null(dt_additional_markets)) {
+      dt_features_all <- merge_additional_markets(
+        dt_main = dt_features_all,
+        dt_additional = dt_additional_markets,
+        verbose = TRUE
+      )
+    }
+  }
+
   # Remove NA rows (from lags/rolling windows)
   n_before_na <- nrow(dt_features_all)
   dt_features_all <- na.omit(dt_features_all)
   n_after_na <- nrow(dt_features_all)
 
-  cat(sprintf("Rows after NA removal: %s (-%s)\n",
+  cat(sprintf("\nRows after NA removal: %s (-%s)\n",
               format(n_after_na, big.mark = ","),
               format(n_before_na - n_after_na, big.mark = ",")))
 
@@ -524,32 +556,63 @@ w_train <- dt_train_long_final$sample_weight
 X_test <- as.matrix(dt_test_long_final[, ..stable_features_long])
 y_test <- dt_test_long_final$label_binary
 
-# Create DMatrix
-dtrain <- xgb.DMatrix(data = X_train, label = y_train, weight = w_train)
+# Split training data into train/validation for early stopping
+set.seed(42)
+val_idx <- sample(1:nrow(X_train), size = floor(0.2 * nrow(X_train)))
+train_idx <- setdiff(1:nrow(X_train), val_idx)
+
+X_train_sub <- X_train[train_idx, ]
+y_train_sub <- y_train[train_idx]
+w_train_sub <- w_train[train_idx]
+
+X_val <- X_train[val_idx, ]
+y_val <- y_train[val_idx]
+w_val <- w_train[val_idx]
+
+# Create DMatrix with validation set
+dtrain <- xgb.DMatrix(data = X_train_sub, label = y_train_sub, weight = w_train_sub)
+dval <- xgb.DMatrix(data = X_val, label = y_val, weight = w_val)
 dtest <- xgb.DMatrix(data = X_test, label = y_test)
 
-# XGBoost parameters (can be tuned later)
+# Calculate scale_pos_weight for class imbalance
+n_negative <- sum(y_train_sub == 0)
+n_positive <- sum(y_train_sub == 1)
+scale_pos_weight_long <- n_negative / (n_positive + 1e-10)
+
+cat(sprintf("  Class balance: Negative=%s, Positive=%s\n",
+            format(n_negative, big.mark = ","),
+            format(n_positive, big.mark = ",")))
+cat(sprintf("  scale_pos_weight: %.4f\n", scale_pos_weight_long))
+
+# XGBoost parameters (optimized with regularization)
 params_long <- list(
   objective = "binary:logistic",
   eval_metric = "auc",
-  max_depth = 6,
-  eta = 0.05,
-  subsample = 0.8,
-  colsample_bytree = 0.8,
-  min_child_weight = 3
+  max_depth = 4,                    # Reduced from 6 to reduce overfitting
+  eta = 0.05,                       # Learning rate
+  subsample = 0.8,                  # Row sampling
+  colsample_bytree = 0.8,           # Column sampling per tree
+  colsample_bynode = 0.8,           # Column sampling per node
+  min_child_weight = 10,            # Min sum of instance weight in child
+  gamma = 0.1,                      # Min loss reduction for split (regularization)
+  lambda = 1.5,                     # L2 regularization
+  alpha = 0.1,                      # L1 regularization
+  scale_pos_weight = scale_pos_weight_long  # Handle class imbalance
 )
 
-cat("\nTraining XGBoost model...\n")
+cat("\nTraining XGBoost model with early stopping...\n")
 tic()
 model_long <- xgb.train(
   params = params_long,
   data = dtrain,
-  nrounds = 200,
+  nrounds = 1000,                   # Increased from 200
+  watchlist = list(train = dtrain, val = dval),
+  early_stopping_rounds = 50,       # Stop if no improvement for 50 rounds
   verbose = 0
 )
 toc()
 
-cat("✓ Model trained\n")
+cat(sprintf("✓ Model trained (best iteration: %d)\n", model_long$best_iteration))
 
 # ===== STEP 9a: EVALUATE LONG MODEL ==========================================
 
@@ -606,8 +669,9 @@ evaluate_binary_model <- function(y_true, y_pred_prob, threshold = 0.5, set_name
   ))
 }
 
-# --- Train Set Evaluation ---
-y_pred_train <- predict(model_long, dtrain)
+# --- Train Set Evaluation (full training set) ---
+dtrain_full <- xgb.DMatrix(data = X_train, label = y_train, weight = w_train)
+y_pred_train <- predict(model_long, dtrain_full)
 metrics_train_long <- evaluate_binary_model(y_train, y_pred_train, set_name = "TRAIN")
 
 # --- Test Set Evaluation ---
@@ -785,39 +849,71 @@ w_train_short <- dt_train_short_final$sample_weight
 X_test_short <- as.matrix(dt_test_short_final[, ..stable_features_short])
 y_test_short <- dt_test_short_final$label_binary
 
-# Create DMatrix
-dtrain_short <- xgb.DMatrix(data = X_train_short, label = y_train_short, weight = w_train_short)
+# Split training data into train/validation for early stopping
+set.seed(42)
+val_idx_short <- sample(1:nrow(X_train_short), size = floor(0.2 * nrow(X_train_short)))
+train_idx_short <- setdiff(1:nrow(X_train_short), val_idx_short)
+
+X_train_sub_short <- X_train_short[train_idx_short, ]
+y_train_sub_short <- y_train_short[train_idx_short]
+w_train_sub_short <- w_train_short[train_idx_short]
+
+X_val_short <- X_train_short[val_idx_short, ]
+y_val_short <- y_train_short[val_idx_short]
+w_val_short <- w_train_short[val_idx_short]
+
+# Create DMatrix with validation set
+dtrain_short <- xgb.DMatrix(data = X_train_sub_short, label = y_train_sub_short, weight = w_train_sub_short)
+dval_short <- xgb.DMatrix(data = X_val_short, label = y_val_short, weight = w_val_short)
 dtest_short <- xgb.DMatrix(data = X_test_short, label = y_test_short)
 
-# XGBoost parameters
+# Calculate scale_pos_weight for class imbalance
+n_negative_short <- sum(y_train_sub_short == 0)
+n_positive_short <- sum(y_train_sub_short == 1)
+scale_pos_weight_short <- n_negative_short / (n_positive_short + 1e-10)
+
+cat(sprintf("  Class balance: Negative=%s, Positive=%s\n",
+            format(n_negative_short, big.mark = ","),
+            format(n_positive_short, big.mark = ",")))
+cat(sprintf("  scale_pos_weight: %.4f\n", scale_pos_weight_short))
+
+# XGBoost parameters (optimized with regularization)
 params_short <- list(
   objective = "binary:logistic",
   eval_metric = "auc",
-  max_depth = 6,
-  eta = 0.05,
-  subsample = 0.8,
-  colsample_bytree = 0.8,
-  min_child_weight = 3
+  max_depth = 4,                    # Reduced from 6 to reduce overfitting
+  eta = 0.05,                       # Learning rate
+  subsample = 0.8,                  # Row sampling
+  colsample_bytree = 0.8,           # Column sampling per tree
+  colsample_bynode = 0.8,           # Column sampling per node
+  min_child_weight = 10,            # Min sum of instance weight in child
+  gamma = 0.1,                      # Min loss reduction for split (regularization)
+  lambda = 1.5,                     # L2 regularization
+  alpha = 0.1,                      # L1 regularization
+  scale_pos_weight = scale_pos_weight_short  # Handle class imbalance
 )
 
-cat("\nTraining XGBoost model...\n")
+cat("\nTraining XGBoost model with early stopping...\n")
 tic()
 model_short <- xgb.train(
   params = params_short,
   data = dtrain_short,
-  nrounds = 200,
+  nrounds = 1000,                   # Increased from 200
+  watchlist = list(train = dtrain_short, val = dval_short),
+  early_stopping_rounds = 50,       # Stop if no improvement for 50 rounds
   verbose = 0
 )
 toc()
 
-cat("✓ Model trained\n")
+cat(sprintf("✓ Model trained (best iteration: %d)\n", model_short$best_iteration))
 
 # ===== STEP 9b: EVALUATE SHORT MODEL =========================================
 
 cat("\n=== STEP 9b: EVALUATE SHORT MODEL ===\n")
 
-# Train Set Evaluation
-y_pred_train_short <- predict(model_short, dtrain_short)
+# Train Set Evaluation (full training set)
+dtrain_short_full <- xgb.DMatrix(data = X_train_short, label = y_train_short, weight = w_train_short)
+y_pred_train_short <- predict(model_short, dtrain_short_full)
 metrics_train_short <- evaluate_binary_model(y_train_short, y_pred_train_short, set_name = "TRAIN")
 
 # Test Set Evaluation

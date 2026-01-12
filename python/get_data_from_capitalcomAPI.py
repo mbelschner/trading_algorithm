@@ -34,13 +34,13 @@ headers = {
 
 #get historical data
 
-epic = "GOLD"
-resolution = "HOUR_4"
+epic = "VIX"
+resolution = "MINUTE_15"
 
 #try out the for loop
 today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 end_date = today - timedelta(days=2)
-start_date = end_date - timedelta(days=1500)
+start_date = datetime(2019, 2, 22)  #22.02.2019
 step = timedelta(days=5)
 
 # Ergebnisliste
