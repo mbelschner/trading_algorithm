@@ -530,9 +530,225 @@ cat("\n=== FINAL FEATURES FOR LONG MODEL ===\n")
 cat(paste(stable_features_long, collapse = "\n"))
 cat("\n")
 
+# ===== STEP 7.5a: SIMPLE PARAMETER GRID SEARCH (LONG MODEL) =================
+
+cat("\n=== STEP 7.5a: SIMPLE PARAMETER GRID SEARCH (LONG MODEL) ===\n")
+
+# Define parameter grid
+param_grid <- expand.grid(
+  max_depth = c(3, 4, 5),
+  eta = c(0.03, 0.05, 0.1),
+  gamma = c(0, 0.1, 0.2),
+  lambda = c(1.0, 1.5, 2.0),
+  min_child_weight = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+n_combinations <- nrow(param_grid)
+cat(sprintf("Testing %d parameter combinations\n", n_combinations))
+cat(sprintf("Estimated time: ~%d-%d minutes\n\n",
+            ceiling(n_combinations * 0.3),
+            ceiling(n_combinations * 1.0)))
+
+# Prepare data
+final_cols_temp <- c("datetime", "year", "label_binary", "sample_weight", stable_features_long)
+dt_train_long_grid <- dt_train_long[, ..final_cols_temp]
+dt_test_long_grid <- dt_test_long[, ..final_cols_temp]
+
+X_train_grid <- as.matrix(dt_train_long_grid[, ..stable_features_long])
+y_train_grid <- dt_train_long_grid$label_binary
+w_train_grid <- dt_train_long_grid$sample_weight
+
+X_test_grid <- as.matrix(dt_test_long_grid[, ..stable_features_long])
+y_test_grid <- dt_test_long_grid$label_binary
+
+# Calculate scale_pos_weight
+n_negative_grid <- sum(y_train_grid == 0)
+n_positive_grid <- sum(y_train_grid == 1)
+scale_pos_weight_grid <- n_negative_grid / (n_positive_grid + 1e-10)
+
+cat(sprintf("Class balance: Negative=%s, Positive=%s\n",
+            format(n_negative_grid, big.mark = ","),
+            format(n_positive_grid, big.mark = ",")))
+cat(sprintf("scale_pos_weight: %.4f\n\n", scale_pos_weight_grid))
+
+# Split for early stopping
+set.seed(42)
+val_idx_grid <- sample(1:nrow(X_train_grid), size = floor(0.2 * nrow(X_train_grid)))
+train_idx_grid <- setdiff(1:nrow(X_train_grid), val_idx_grid)
+
+X_train_sub_grid <- X_train_grid[train_idx_grid, ]
+y_train_sub_grid <- y_train_grid[train_idx_grid]
+w_train_sub_grid <- w_train_grid[train_idx_grid]
+
+X_val_grid <- X_train_grid[val_idx_grid, ]
+y_val_grid <- y_train_grid[val_idx_grid]
+w_val_grid <- w_train_grid[val_idx_grid]
+
+# Initialize results
+grid_results_long <- data.frame()
+
+# Progress bar
+pb <- progress_bar$new(
+  format = "  [:bar] :percent | Combo :current/:total | ETA: :eta",
+  total = n_combinations,
+  clear = FALSE,
+  width = 70
+)
+
+# Loop over parameter combinations
+for (i in 1:n_combinations) {
+
+  # Current parameters
+  params_test <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    max_depth = param_grid$max_depth[i],
+    eta = param_grid$eta[i],
+    gamma = param_grid$gamma[i],
+    lambda = param_grid$lambda[i],
+    min_child_weight = param_grid$min_child_weight[i],
+    subsample = 0.8,
+    colsample_bytree = 0.8,
+    colsample_bynode = 0.8,
+    scale_pos_weight = scale_pos_weight_grid
+  )
+
+  # Create DMatrix
+  dtrain_grid <- xgb.DMatrix(data = X_train_sub_grid, label = y_train_sub_grid, weight = w_train_sub_grid)
+  dval_grid <- xgb.DMatrix(data = X_val_grid, label = y_val_grid, weight = w_val_grid)
+  dtrain_full_grid <- xgb.DMatrix(data = X_train_grid, label = y_train_grid, weight = w_train_grid)
+  dtest_grid <- xgb.DMatrix(data = X_test_grid, label = y_test_grid)
+
+  # Train model
+  model_grid <- xgb.train(
+    params = params_test,
+    data = dtrain_grid,
+    nrounds = 1000,
+    evals = list(train = dtrain_grid, val = dval_grid),
+    early_stopping_rounds = 50,
+    verbose = 0
+  )
+
+  # Predictions on training set
+  pred_train_grid <- predict(model_grid, dtrain_full_grid)
+  pred_train_class <- ifelse(pred_train_grid > 0.5, 1, 0)
+
+  # Training metrics
+  train_auc <- tryCatch({
+    as.numeric(pROC::auc(pROC::roc(y_train_grid, pred_train_grid, quiet = TRUE)))
+  }, error = function(e) NA)
+
+  train_conf <- table(Predicted = pred_train_class, Actual = y_train_grid)
+  train_precision <- ifelse(sum(pred_train_class == 1) > 0,
+                             train_conf["1", "1"] / sum(train_conf["1", ]),
+                             0)
+  train_recall <- ifelse(sum(y_train_grid == 1) > 0,
+                          train_conf["1", "1"] / sum(train_conf[, "1"]),
+                          0)
+  train_f1 <- ifelse((train_precision + train_recall) > 0,
+                     2 * train_precision * train_recall / (train_precision + train_recall),
+                     0)
+
+  # Predictions on test set
+  pred_test_grid <- predict(model_grid, dtest_grid)
+  pred_test_class <- ifelse(pred_test_grid > 0.5, 1, 0)
+
+  # Test metrics
+  test_auc <- tryCatch({
+    as.numeric(pROC::auc(pROC::roc(y_test_grid, pred_test_grid, quiet = TRUE)))
+  }, error = function(e) NA)
+
+  test_conf <- table(Predicted = pred_test_class, Actual = y_test_grid)
+  test_precision <- ifelse(sum(pred_test_class == 1) > 0,
+                            test_conf["1", "1"] / sum(test_conf["1", ]),
+                            0)
+  test_recall <- ifelse(sum(y_test_grid == 1) > 0,
+                         test_conf["1", "1"] / sum(test_conf[, "1"]),
+                         0)
+  test_f1 <- ifelse((test_precision + test_recall) > 0,
+                    2 * test_precision * test_recall / (test_precision + test_recall),
+                    0)
+
+  # Store results
+  grid_results_long <- rbind(grid_results_long, data.frame(
+    combination_id = i,
+    max_depth = param_grid$max_depth[i],
+    eta = param_grid$eta[i],
+    gamma = param_grid$gamma[i],
+    lambda = param_grid$lambda[i],
+    min_child_weight = param_grid$min_child_weight[i],
+    train_auc = train_auc,
+    train_precision = train_precision,
+    train_recall = train_recall,
+    train_f1 = train_f1,
+    test_auc = test_auc,
+    test_precision = test_precision,
+    test_recall = test_recall,
+    test_f1 = test_f1,
+    #best_iteration = ifelse(is.null(model_grid$best_iteration), model_grid$niter, model_grid$best_iteration),
+    stringsAsFactors = FALSE
+  ))
+
+  pb$tick()
+}
+
+# Save results
+grid_output_path <- file.path(backtest_output_path, "parameter_grid")
+if (!dir.exists(grid_output_path)) {
+  dir.create(grid_output_path, recursive = TRUE)
+}
+
+# Add ranking based on 4 key metrics (lower rank = better)
+grid_results_long$rank_train_auc <- rank(-grid_results_long$train_auc, na.last = "keep")
+grid_results_long$rank_train_precision <- rank(-grid_results_long$train_precision, na.last = "keep")
+grid_results_long$rank_test_auc <- rank(-grid_results_long$test_auc, na.last = "keep")
+grid_results_long$rank_test_precision <- rank(-grid_results_long$test_precision, na.last = "keep")
+
+# Calculate average rank (lower is better)
+grid_results_long$avg_rank <- rowMeans(grid_results_long[, c("rank_train_auc", "rank_train_precision",
+                                                               "rank_test_auc", "rank_test_precision")],
+                                        na.rm = TRUE)
+
+fwrite(grid_results_long, file.path(grid_output_path, paste0(EPIC, "_", INTERVAL, "_long_grid_results.csv")))
+
+cat(sprintf("\n\n✓ Grid search complete. Results saved to:\n"))
+cat(sprintf("  %s\n", file.path(grid_output_path, paste0(EPIC, "_", INTERVAL, "_long_grid_results.csv"))))
+
+# Find best parameters (based on average rank across 4 metrics)
+best_idx_long <- which.min(grid_results_long$avg_rank)
+best_params_long <- grid_results_long[best_idx_long, ]
+
+cat("\n=== BEST PARAMETERS (LONG MODEL) ===\n")
+cat(sprintf("Combination ID: %d\n", best_params_long$combination_id))
+cat(sprintf("  max_depth:        %d\n", best_params_long$max_depth))
+cat(sprintf("  eta:              %.3f\n", best_params_long$eta))
+cat(sprintf("  gamma:            %.2f\n", best_params_long$gamma))
+cat(sprintf("  lambda:           %.2f\n", best_params_long$lambda))
+cat(sprintf("  min_child_weight: %d\n", best_params_long$min_child_weight))
+cat(sprintf("  Average Rank:     %.2f (lower is better)\n\n", best_params_long$avg_rank))
+
+cat("Individual Ranks:\n")
+cat(sprintf("  Train AUC Rank:       %d\n", best_params_long$rank_train_auc))
+cat(sprintf("  Train Precision Rank: %d\n", best_params_long$rank_train_precision))
+cat(sprintf("  Test AUC Rank:        %d\n", best_params_long$rank_test_auc))
+cat(sprintf("  Test Precision Rank:  %d\n\n", best_params_long$rank_test_precision))
+
+cat("Training Performance:\n")
+cat(sprintf("  Train AUC:       %.4f\n", best_params_long$train_auc))
+cat(sprintf("  Train Precision: %.4f\n", best_params_long$train_precision))
+cat(sprintf("  Train Recall:    %.4f\n", best_params_long$train_recall))
+cat(sprintf("  Train F1:        %.4f\n\n", best_params_long$train_f1))
+
+cat("Test Performance:\n")
+cat(sprintf("  Test AUC:        %.4f\n", best_params_long$test_auc))
+cat(sprintf("  Test Precision:  %.4f\n", best_params_long$test_precision))
+cat(sprintf("  Test Recall:     %.4f\n", best_params_long$test_recall))
+cat(sprintf("  Test F1:         %.4f\n\n", best_params_long$test_f1))
+
 # ===== STEP 8a: TRAIN FINAL LONG MODEL ======================================
 
-cat("\n=== STEP 8a: TRAIN FINAL LONG MODEL ===\n")
+cat("\n=== STEP 8a: TRAIN FINAL LONG MODEL (WITH BEST PARAMETERS) ===\n")
 
 # Prepare final datasets with selected features
 final_cols <- c("datetime", "year", "label_binary", "sample_weight",
@@ -575,29 +791,29 @@ dval <- xgb.DMatrix(data = X_val, label = y_val, weight = w_val)
 dtest <- xgb.DMatrix(data = X_test, label = y_test)
 
 # Calculate scale_pos_weight for class imbalance
-n_negative <- sum(y_train_sub == 0)
-n_positive <- sum(y_train_sub == 1)
-scale_pos_weight_long <- n_negative / (n_positive + 1e-10)
+n_negative <- sum(y_train == 0)
+n_positive <- sum(y_train == 1)
+scale_pos_weight <- n_negative / (n_positive + 1e-10)
 
-cat(sprintf("  Class balance: Negative=%s, Positive=%s\n",
+cat(sprintf("\n  Class balance: Negative=%s, Positive=%s\n",
             format(n_negative, big.mark = ","),
             format(n_positive, big.mark = ",")))
-cat(sprintf("  scale_pos_weight: %.4f\n", scale_pos_weight_long))
+cat(sprintf("  scale_pos_weight: %.4f\n", scale_pos_weight))
 
-# XGBoost parameters (optimized with regularization)
+# Use best parameters from grid search
 params_long <- list(
   objective = "binary:logistic",
   eval_metric = "auc",
-  max_depth = 4,                    # Reduced from 6 to reduce overfitting
-  eta = 0.05,                       # Learning rate
-  subsample = 0.8,                  # Row sampling
-  colsample_bytree = 0.8,           # Column sampling per tree
-  colsample_bynode = 0.8,           # Column sampling per node
-  min_child_weight = 10,            # Min sum of instance weight in child
-  gamma = 0.1,                      # Min loss reduction for split (regularization)
-  lambda = 1.5,                     # L2 regularization
-  alpha = 0.1,                      # L1 regularization
-  scale_pos_weight = scale_pos_weight_long  # Handle class imbalance
+  max_depth = best_params_long$max_depth,
+  eta = best_params_long$eta,
+  subsample = 0.8,
+  colsample_bytree = 0.8,
+  colsample_bynode = 0.8,
+  min_child_weight = best_params_long$min_child_weight,
+  gamma = best_params_long$gamma,
+  lambda = best_params_long$lambda,
+  alpha = 0.1,
+  scale_pos_weight = scale_pos_weight_grid
 )
 
 cat("\nTraining XGBoost model with early stopping...\n")
@@ -606,13 +822,27 @@ model_long <- xgb.train(
   params = params_long,
   data = dtrain,
   nrounds = 1000,                   # Increased from 200
-  watchlist = list(train = dtrain, val = dval),
+  evals = list(train = dtrain, val = dval),
   early_stopping_rounds = 50,       # Stop if no improvement for 50 rounds
   verbose = 0
 )
 toc()
 
 cat(sprintf("✓ Model trained (best iteration: %d)\n", model_long$best_iteration))
+
+# --- Save Long Model ---
+models_output_path <- file.path(backtest_output_path, "models")
+if (!dir.exists(models_output_path)) {
+  dir.create(models_output_path, recursive = TRUE)
+}
+
+model_long_file <- file.path(
+  models_output_path,
+  paste0(EPIC, "_", INTERVAL, "_model_long_", LABEL_VERSION, ".rds")
+)
+
+saveRDS(model_long, model_long_file)
+cat(sprintf("✓ Long model saved: %s\n", model_long_file))
 
 # ===== STEP 9a: EVALUATE LONG MODEL ==========================================
 
@@ -684,8 +914,8 @@ importance_long <- xgb.importance(
   feature_names = stable_features_long,
   model = model_long
 )
-cat("\nTop 10 features:\n")
-print(head(importance_long, 10))
+cat("\nTop 15 features:\n")
+print(head(importance_long, 15))
 
 # ============================================================================
 # SHORT MODEL PIPELINE
@@ -824,9 +1054,209 @@ cat("\n=== FINAL FEATURES FOR SHORT MODEL ===\n")
 cat(paste(stable_features_short, collapse = "\n"))
 cat("\n")
 
+# ===== STEP 7.5b: SIMPLE PARAMETER GRID SEARCH (SHORT MODEL) ================
+
+cat("\n=== STEP 7.5b: SIMPLE PARAMETER GRID SEARCH (SHORT MODEL) ===\n")
+
+# Use same parameter grid
+cat(sprintf("Testing %d parameter combinations\n", n_combinations))
+cat(sprintf("Estimated time: ~%d-%d minutes\n\n",
+            ceiling(n_combinations * 0.3),
+            ceiling(n_combinations * 1.0)))
+
+# Prepare data
+final_cols_temp_short <- c("datetime", "year", "label_binary", "sample_weight", stable_features_short)
+dt_train_short_grid <- dt_train_short[, ..final_cols_temp_short]
+dt_test_short_grid <- dt_test_short[, ..final_cols_temp_short]
+
+X_train_grid_short <- as.matrix(dt_train_short_grid[, ..stable_features_short])
+y_train_grid_short <- dt_train_short_grid$label_binary
+w_train_grid_short <- dt_train_short_grid$sample_weight
+
+X_test_grid_short <- as.matrix(dt_test_short_grid[, ..stable_features_short])
+y_test_grid_short <- dt_test_short_grid$label_binary
+
+# Calculate scale_pos_weight
+n_negative_grid_short <- sum(y_train_grid_short == 0)
+n_positive_grid_short <- sum(y_train_grid_short == 1)
+scale_pos_weight_grid_short <- n_negative_grid_short / (n_positive_grid_short + 1e-10)
+
+cat(sprintf("Class balance: Negative=%s, Positive=%s\n",
+            format(n_negative_grid_short, big.mark = ","),
+            format(n_positive_grid_short, big.mark = ",")))
+cat(sprintf("scale_pos_weight: %.4f\n\n", scale_pos_weight_grid_short))
+
+# Split for early stopping
+set.seed(42)
+val_idx_grid_short <- sample(1:nrow(X_train_grid_short), size = floor(0.2 * nrow(X_train_grid_short)))
+train_idx_grid_short <- setdiff(1:nrow(X_train_grid_short), val_idx_grid_short)
+
+X_train_sub_grid_short <- X_train_grid_short[train_idx_grid_short, ]
+y_train_sub_grid_short <- y_train_grid_short[train_idx_grid_short]
+w_train_sub_grid_short <- w_train_grid_short[train_idx_grid_short]
+
+X_val_grid_short <- X_train_grid_short[val_idx_grid_short, ]
+y_val_grid_short <- y_train_grid_short[val_idx_grid_short]
+w_val_grid_short <- w_train_grid_short[val_idx_grid_short]
+
+# Initialize results
+grid_results_short <- data.frame()
+
+# Progress bar
+pb_short <- progress_bar$new(
+  format = "  [:bar] :percent | Combo :current/:total | ETA: :eta",
+  total = n_combinations,
+  clear = FALSE,
+  width = 70
+)
+
+# Loop over parameter combinations
+for (i in 1:n_combinations) {
+
+  # Current parameters
+  params_test_short <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    max_depth = param_grid$max_depth[i],
+    eta = param_grid$eta[i],
+    gamma = param_grid$gamma[i],
+    lambda = param_grid$lambda[i],
+    min_child_weight = param_grid$min_child_weight[i],
+    subsample = 0.8,
+    colsample_bytree = 0.8,
+    colsample_bynode = 0.8,
+    scale_pos_weight = scale_pos_weight_grid_short
+  )
+
+  # Create DMatrix
+  dtrain_grid_short <- xgb.DMatrix(data = X_train_sub_grid_short, label = y_train_sub_grid_short, weight = w_train_sub_grid_short)
+  dval_grid_short <- xgb.DMatrix(data = X_val_grid_short, label = y_val_grid_short, weight = w_val_grid_short)
+  dtrain_full_grid_short <- xgb.DMatrix(data = X_train_grid_short, label = y_train_grid_short, weight = w_train_grid_short)
+  dtest_grid_short <- xgb.DMatrix(data = X_test_grid_short, label = y_test_grid_short)
+
+  # Train model
+  model_grid_short <- xgb.train(
+    params = params_test_short,
+    data = dtrain_grid_short,
+    nrounds = 1000,
+    evals = list(train = dtrain_grid_short, val = dval_grid_short),
+    early_stopping_rounds = 50,
+    verbose = 0
+  )
+
+  # Predictions on training set
+  pred_train_grid_short <- predict(model_grid_short, dtrain_full_grid_short)
+  pred_train_class_short <- ifelse(pred_train_grid_short > 0.5, 1, 0)
+
+  # Training metrics
+  train_auc_short <- tryCatch({
+    as.numeric(pROC::auc(pROC::roc(y_train_grid_short, pred_train_grid_short, quiet = TRUE)))
+  }, error = function(e) NA)
+
+  train_conf_short <- table(Predicted = pred_train_class_short, Actual = y_train_grid_short)
+  train_precision_short <- ifelse(sum(pred_train_class_short == 1) > 0,
+                                   train_conf_short["1", "1"] / sum(train_conf_short["1", ]),
+                                   0)
+  train_recall_short <- ifelse(sum(y_train_grid_short == 1) > 0,
+                                train_conf_short["1", "1"] / sum(train_conf_short[, "1"]),
+                                0)
+  train_f1_short <- ifelse((train_precision_short + train_recall_short) > 0,
+                            2 * train_precision_short * train_recall_short / (train_precision_short + train_recall_short),
+                            0)
+
+  # Predictions on test set
+  pred_test_grid_short <- predict(model_grid_short, dtest_grid_short)
+  pred_test_class_short <- ifelse(pred_test_grid_short > 0.5, 1, 0)
+
+  # Test metrics
+  test_auc_short <- tryCatch({
+    as.numeric(pROC::auc(pROC::roc(y_test_grid_short, pred_test_grid_short, quiet = TRUE)))
+  }, error = function(e) NA)
+
+  test_conf_short <- table(Predicted = pred_test_class_short, Actual = y_test_grid_short)
+  test_precision_short <- ifelse(sum(pred_test_class_short == 1) > 0,
+                                  test_conf_short["1", "1"] / sum(test_conf_short["1", ]),
+                                  0)
+  test_recall_short <- ifelse(sum(y_test_grid_short == 1) > 0,
+                               test_conf_short["1", "1"] / sum(test_conf_short[, "1"]),
+                               0)
+  test_f1_short <- ifelse((test_precision_short + test_recall_short) > 0,
+                          2 * test_precision_short * test_recall_short / (test_precision_short + test_recall_short),
+                          0)
+
+  # Store results
+  grid_results_short <- rbind(grid_results_short, data.frame(
+    combination_id = i,
+    max_depth = param_grid$max_depth[i],
+    eta = param_grid$eta[i],
+    gamma = param_grid$gamma[i],
+    lambda = param_grid$lambda[i],
+    min_child_weight = param_grid$min_child_weight[i],
+    train_auc = train_auc_short,
+    train_precision = train_precision_short,
+    train_recall = train_recall_short,
+    train_f1 = train_f1_short,
+    test_auc = test_auc_short,
+    test_precision = test_precision_short,
+    test_recall = test_recall_short,
+    test_f1 = test_f1_short,
+    stringsAsFactors = FALSE
+  ))
+
+  pb_short$tick()
+}
+
+# Add ranking based on 4 key metrics (lower rank = better)
+grid_results_short$rank_train_auc <- rank(-grid_results_short$train_auc, na.last = "keep")
+grid_results_short$rank_train_precision <- rank(-grid_results_short$train_precision, na.last = "keep")
+grid_results_short$rank_test_auc <- rank(-grid_results_short$test_auc, na.last = "keep")
+grid_results_short$rank_test_precision <- rank(-grid_results_short$test_precision, na.last = "keep")
+
+# Calculate average rank (lower is better)
+grid_results_short$avg_rank <- rowMeans(grid_results_short[, c("rank_train_auc", "rank_train_precision",
+                                                                 "rank_test_auc", "rank_test_precision")],
+                                         na.rm = TRUE)
+
+# Save results
+fwrite(grid_results_short, file.path(grid_output_path, paste0(EPIC, "_", INTERVAL, "_short_grid_results.csv")))
+
+cat(sprintf("\n\n✓ Grid search complete. Results saved to:\n"))
+cat(sprintf("  %s\n", file.path(grid_output_path, paste0(EPIC, "_", INTERVAL, "_short_grid_results.csv"))))
+
+# Find best parameters (based on average rank across 4 metrics)
+best_idx_short <- which.min(grid_results_short$avg_rank)
+best_params_short <- grid_results_short[best_idx_short, ]
+
+cat("\n=== BEST PARAMETERS (SHORT MODEL) ===\n")
+cat(sprintf("Combination ID: %d\n", best_params_short$combination_id))
+cat(sprintf("  max_depth:        %d\n", best_params_short$max_depth))
+cat(sprintf("  eta:              %.3f\n", best_params_short$eta))
+cat(sprintf("  gamma:            %.2f\n", best_params_short$gamma))
+cat(sprintf("  lambda:           %.2f\n", best_params_short$lambda))
+cat(sprintf("  min_child_weight: %d\n", best_params_short$min_child_weight))
+cat(sprintf("  Average Rank:     %.2f (lower is better)\n\n", best_params_short$avg_rank))
+
+cat("Individual Ranks:\n")
+cat(sprintf("  Train AUC Rank:       %d\n", best_params_short$rank_train_auc))
+cat(sprintf("  Train Precision Rank: %d\n", best_params_short$rank_train_precision))
+cat(sprintf("  Test AUC Rank:        %d\n", best_params_short$rank_test_auc))
+cat(sprintf("  Test Precision Rank:  %d\n\n", best_params_short$rank_test_precision))
+
+cat("Training Performance:\n")
+cat(sprintf("  Train AUC:       %.4f\n", best_params_short$train_auc))
+cat(sprintf("  Train Precision: %.4f\n", best_params_short$train_precision))
+cat(sprintf("  Train Recall:    %.4f\n", best_params_short$train_recall))
+cat(sprintf("  Train F1:        %.4f\n\n", best_params_short$train_f1))
+
+cat("Test Performance:\n")
+cat(sprintf("  Test AUC:        %.4f\n", best_params_short$test_auc))
+cat(sprintf("  Test Precision:  %.4f\n", best_params_short$test_precision))
+cat(sprintf("  Test Recall:     %.4f\n", best_params_short$test_recall))
+cat(sprintf("  Test F1:         %.4f\n\n", best_params_short$test_f1))
+
 # ===== STEP 8b: TRAIN FINAL SHORT MODEL =====================================
 
-cat("\n=== STEP 8b: TRAIN FINAL SHORT MODEL ===\n")
+cat("\n=== STEP 8b: TRAIN FINAL SHORT MODEL (WITH BEST PARAMETERS) ===\n")
 
 final_cols_short <- c("datetime", "year", "label_binary", "sample_weight",
                       stable_features_short)
@@ -868,29 +1298,29 @@ dval_short <- xgb.DMatrix(data = X_val_short, label = y_val_short, weight = w_va
 dtest_short <- xgb.DMatrix(data = X_test_short, label = y_test_short)
 
 # Calculate scale_pos_weight for class imbalance
-n_negative_short <- sum(y_train_sub_short == 0)
-n_positive_short <- sum(y_train_sub_short == 1)
+n_negative_short <- sum(y_train_short == 0)
+n_positive_short <- sum(y_train_short == 1)
 scale_pos_weight_short <- n_negative_short / (n_positive_short + 1e-10)
 
-cat(sprintf("  Class balance: Negative=%s, Positive=%s\n",
+cat(sprintf("\n  Class balance: Negative=%s, Positive=%s\n",
             format(n_negative_short, big.mark = ","),
             format(n_positive_short, big.mark = ",")))
 cat(sprintf("  scale_pos_weight: %.4f\n", scale_pos_weight_short))
 
-# XGBoost parameters (optimized with regularization)
+# XGBoost parameters
 params_short <- list(
   objective = "binary:logistic",
   eval_metric = "auc",
-  max_depth = 4,                    # Reduced from 6 to reduce overfitting
-  eta = 0.05,                       # Learning rate
-  subsample = 0.8,                  # Row sampling
-  colsample_bytree = 0.8,           # Column sampling per tree
-  colsample_bynode = 0.8,           # Column sampling per node
-  min_child_weight = 10,            # Min sum of instance weight in child
-  gamma = 0.1,                      # Min loss reduction for split (regularization)
-  lambda = 1.5,                     # L2 regularization
-  alpha = 0.1,                      # L1 regularization
-  scale_pos_weight = scale_pos_weight_short  # Handle class imbalance
+  max_depth = 4,
+  eta = 0.05,
+  subsample = 0.8,
+  colsample_bytree = 0.8,
+  colsample_bynode = 0.8,
+  min_child_weight = 10,
+  gamma = 0.1,
+  lambda = 1.5,
+  alpha = 0.1,
+  scale_pos_weight = scale_pos_weight_short
 )
 
 cat("\nTraining XGBoost model with early stopping...\n")
@@ -899,13 +1329,22 @@ model_short <- xgb.train(
   params = params_short,
   data = dtrain_short,
   nrounds = 1000,                   # Increased from 200
-  watchlist = list(train = dtrain_short, val = dval_short),
+  evals = list(train = dtrain_short, val = dval_short),
   early_stopping_rounds = 50,       # Stop if no improvement for 50 rounds
   verbose = 0
 )
 toc()
 
 cat(sprintf("✓ Model trained (best iteration: %d)\n", model_short$best_iteration))
+
+# --- Save Short Model ---
+model_short_file <- file.path(
+  models_output_path,
+  paste0(EPIC, "_", INTERVAL, "_model_short_", LABEL_VERSION, ".rds")
+)
+
+saveRDS(model_short, model_short_file)
+cat(sprintf("✓ Short model saved: %s\n", model_short_file))
 
 # ===== STEP 9b: EVALUATE SHORT MODEL =========================================
 
