@@ -830,19 +830,62 @@ toc()
 
 cat(sprintf("✓ Model trained (best iteration: %d)\n", model_long$best_iteration))
 
-# --- Save Long Model ---
+# --- Save Long Model (Multiple Formats for Safety) ---
 models_output_path <- file.path(backtest_output_path, "models")
 if (!dir.exists(models_output_path)) {
   dir.create(models_output_path, recursive = TRUE)
 }
 
-model_long_file <- file.path(
+cat("\nSaving Long model in multiple formats...\n")
+
+# Format 1: RDS (R binary format)
+model_long_file_rds <- file.path(
   models_output_path,
   paste0(EPIC, "_", INTERVAL, "_model_long_", LABEL_VERSION, ".rds")
 )
+saveRDS(model_long, model_long_file_rds)
+cat(sprintf("  ✓ RDS saved: %s (%.2f MB)\n",
+            basename(model_long_file_rds),
+            file.size(model_long_file_rds) / 1024^2))
 
-saveRDS(model_long, model_long_file)
-cat(sprintf("✓ Long model saved: %s\n", model_long_file))
+# Format 2: XGBoost native binary format
+model_long_file_xgb <- file.path(
+  models_output_path,
+  paste0(EPIC, "_", INTERVAL, "_model_long_", LABEL_VERSION, ".xgb")
+)
+xgb.save(model_long, model_long_file_xgb)
+cat(sprintf("  ✓ XGB saved: %s (%.2f MB)\n",
+            basename(model_long_file_xgb),
+            file.size(model_long_file_xgb) / 1024^2))
+
+# Format 3: JSON format (human-readable, for debugging)
+model_long_file_json <- file.path(
+  models_output_path,
+  paste0(EPIC, "_", INTERVAL, "_model_long_", LABEL_VERSION, ".json")
+)
+xgb.save(model_long, model_long_file_json)
+cat(sprintf("  ✓ JSON saved: %s (%.2f MB)\n",
+            basename(model_long_file_json),
+            file.size(model_long_file_json) / 1024^2))
+
+# Save metadata separately (as safety check)
+model_long_metadata <- list(
+  feature_names = model_long$feature_names,
+  n_features = length(model_long$feature_names),
+  niter = model_long$niter,
+  best_iteration = model_long$best_iteration,
+  params = model_long$params,
+  save_timestamp = Sys.time()
+)
+
+model_long_meta_file <- file.path(
+  models_output_path,
+  paste0(EPIC, "_", INTERVAL, "_model_long_", LABEL_VERSION, "_metadata.rds")
+)
+saveRDS(model_long_metadata, model_long_meta_file)
+cat(sprintf("  ✓ Metadata saved: %s\n", basename(model_long_meta_file)))
+
+cat(sprintf("\n✓ Long model saved in 4 formats (RDS, XGB, JSON, Metadata)\n"))
 
 # ===== STEP 9a: EVALUATE LONG MODEL ==========================================
 
@@ -1337,14 +1380,57 @@ toc()
 
 cat(sprintf("✓ Model trained (best iteration: %d)\n", model_short$best_iteration))
 
-# --- Save Short Model ---
-model_short_file <- file.path(
+# --- Save Short Model (Multiple Formats for Safety) ---
+cat("\nSaving Short model in multiple formats...\n")
+
+# Format 1: RDS (R binary format)
+model_short_file_rds <- file.path(
   models_output_path,
   paste0(EPIC, "_", INTERVAL, "_model_short_", LABEL_VERSION, ".rds")
 )
+saveRDS(model_short, model_short_file_rds)
+cat(sprintf("  ✓ RDS saved: %s (%.2f MB)\n",
+            basename(model_short_file_rds),
+            file.size(model_short_file_rds) / 1024^2))
 
-saveRDS(model_short, model_short_file)
-cat(sprintf("✓ Short model saved: %s\n", model_short_file))
+# Format 2: XGBoost native binary format
+model_short_file_xgb <- file.path(
+  models_output_path,
+  paste0(EPIC, "_", INTERVAL, "_model_short_", LABEL_VERSION, ".xgb")
+)
+xgb.save(model_short, model_short_file_xgb)
+cat(sprintf("  ✓ XGB saved: %s (%.2f MB)\n",
+            basename(model_short_file_xgb),
+            file.size(model_short_file_xgb) / 1024^2))
+
+# Format 3: JSON format (human-readable, for debugging)
+model_short_file_json <- file.path(
+  models_output_path,
+  paste0(EPIC, "_", INTERVAL, "_model_short_", LABEL_VERSION, ".json")
+)
+xgb.save(model_short, model_short_file_json)
+cat(sprintf("  ✓ JSON saved: %s (%.2f MB)\n",
+            basename(model_short_file_json),
+            file.size(model_short_file_json) / 1024^2))
+
+# Save metadata separately (as safety check)
+model_short_metadata <- list(
+  feature_names = model_short$feature_names,
+  n_features = length(model_short$feature_names),
+  niter = model_short$niter,
+  best_iteration = model_short$best_iteration,
+  params = model_short$params,
+  save_timestamp = Sys.time()
+)
+
+model_short_meta_file <- file.path(
+  models_output_path,
+  paste0(EPIC, "_", INTERVAL, "_model_short_", LABEL_VERSION, "_metadata.rds")
+)
+saveRDS(model_short_metadata, model_short_meta_file)
+cat(sprintf("  ✓ Metadata saved: %s\n", basename(model_short_meta_file)))
+
+cat(sprintf("\n✓ Short model saved in 4 formats (RDS, XGB, JSON, Metadata)\n"))
 
 # ===== STEP 9b: EVALUATE SHORT MODEL =========================================
 
