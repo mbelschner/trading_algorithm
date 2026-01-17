@@ -1,0 +1,37 @@
+=== PnL SIMULATION SUMMARY ===
+
+Epic: GOLD
+Interval: MINUTE_15
+Label Version: enhanced_neutral
+Test Year: 2025
+
+Total Bars: 3,735
+Total Trades: 2,733
+  Long Trades:  1,179 (43.14%)
+  Short Trades: 1,554 (56.86%)
+
+=== OVERALL PERFORMANCE ===
+Cumulative PnL:        -0.103748 (-10.37%)
+Mean PnL per trade:    -0.000038 (-0.0038%)
+Std Dev PnL:           0.005426
+Sharpe Ratio:          -0.0070
+Win Rate:              47.09%
+Average Win:           0.003970 (0.3970%)
+Average Loss:          -0.004411 (-0.4411%)
+Profit Factor:         0.9001
+Max Drawdown:          -0.342886 (-34.29%)
+
+=== LONG TRADES ===
+Trades: 1,179
+Cumulative PnL:        0.764920 (76.49%)
+Mean PnL:              0.000649 (0.0649%)
+Sharpe Ratio:          0.1178
+Win Rate:              54.54%
+
+=== SHORT TRADES ===
+Trades: 1,554
+Cumulative PnL:        -0.868668 (-86.87%)
+Mean PnL:              -0.000559 (-0.0559%)
+Sharpe Ratio:          -0.1053
+Win Rate:              41.44%
+

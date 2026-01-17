@@ -15,7 +15,8 @@
       "Bash(git add:*)",
       "Bash(del nul)",
       "Bash(rm:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(del \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\r\\\\03_pnl_simulation.R\")"
     ]
   }
 }
