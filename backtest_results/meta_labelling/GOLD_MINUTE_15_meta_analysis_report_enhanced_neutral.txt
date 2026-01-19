@@ -1,0 +1,315 @@
+================================================================================
+                    META-LABELLING ANALYSIS REPORT
+              For Analysis by Claude (LLM Interpretation)
+================================================================================
+
+Please analyze this meta-labelling experiment for a trading algorithm.
+The goal is to determine if the meta-model adds value by filtering out
+low-quality trading signals from the primary model.
+
+================================================================================
+1. CONTEXT & SETUP
+================================================================================
+
+Asset: GOLD (Gold futures)
+Timeframe: MINUTE_15 (15-minute bars)
+Label Version: enhanced_neutral
+Test Year: 2025 (out-of-sample)
+Training Period: All data before 2025
+
+Primary Model:
+- Two XGBoost classifiers (Long and Short) predict directional moves
+- Each outputs a probability: pred_prob_long and pred_prob_short
+- Signal generated when one probability exceeds threshold (e.g., 0.55)
+- PnL calculated as log return in signal direction
+
+Meta-Model Objective:
+- Binary classification: P(Trade is profitable | Features)
+- Target: 1 if pnl > 0, else 0
+- Goal: Filter out low-confidence signals to improve overall performance
+
+================================================================================
+2. FEATURES USED IN META-MODEL
+================================================================================
+
+Feature Descriptions:
+-------------------------------------------------------------------------------
+clarity_gap          [Signal Quality]
+    abs(pred_prob_long - pred_prob_short): How 'clear' is the signal direction
+
+pred_prob_long       [Signal Quality]
+    Primary Long model's probability estimate
+
+pred_prob_short      [Signal Quality]
+    Primary Short model's probability estimate
+
+atr_ratio            [Volatility]
+    atr_14 / atr_28: Short-term vs long-term volatility ratio
+
+atr_14               [Volatility]
+    14-period Average True Range (volatility)
+
+atr_28               [Volatility]
+    28-period Average True Range (volatility)
+
+rsi_diff             [Momentum]
+    rsi_28 - rsi_14: Momentum divergence indicator
+
+rsi_14               [Momentum]
+    14-period Relative Strength Index
+
+rsi_28               [Momentum]
+    28-period Relative Strength Index
+
+volume_zscore_10     [Volume]
+    Volume z-score over 10 periods (unusual volume detection)
+
+volume_zscore_20     [Volume]
+    Volume z-score over 20 periods
+
+volume_roll_mean_10  [Volume]
+    Rolling mean of volume over 10 periods
+
+volume_ratio         [Volume]
+    Current volume / average volume
+
+hour                 [Time]
+    Hour of day (0-23) when signal occurred
+
+trade_direction      [Direction]
+    1 for Long signal, -1 for Short signal
+
+adx_14               [Trend]
+    14-period Average Directional Index (trend strength)
+
+obv                  [Volume]
+    On-Balance Volume
+
+cci_20               [Momentum]
+    20-period Commodity Channel Index
+
+sar                  [Trend]
+    Parabolic SAR
+
+cmo_14               [Momentum]
+    14-period Chande Momentum Oscillator
+
+
+Total features used: 20
+Features actually selected:  clarity_gap, pred_prob_long, pred_prob_short, atr_ratio, atr_14, atr_28, rsi_diff, rsi_14, rsi_28, volume_zscore_10, volume_zscore_20, volume_roll_mean_10, volume_ratio, hour, trade_direction, adx_14, obv, cci_20, sar, cmo_14 
+
+================================================================================
+3. DATA SPLIT
+================================================================================
+
+Training Set (before 2025):
+  Total trades: 12,583
+  Profitable: 6,094 (48.4%)
+  Not profitable: 6,489 (51.6%)
+
+Test Set (2025 - Out of Sample):
+  Total trades: 2,733
+  Profitable: 1,287 (47.1%)
+  Not profitable: 1,446 (52.9%)
+
+================================================================================
+4. MODEL PERFORMANCE METRICS
+================================================================================
+
+ROC-AUC (Area Under Receiver Operating Characteristic Curve):
+  Training CV AUC: 0.6414
+  Test AUC:        0.5557
+  Difference:      -0.0857
+
+Interpretation:
+  AUC = 0.50: Random guessing (no predictive power)
+  AUC = 0.60: Weak discrimination
+  AUC = 0.70: Acceptable discrimination
+  AUC = 0.80: Good discrimination
+  AUC = 0.90: Excellent discrimination
+
+================================================================================
+5. FEATURE IMPORTANCE (XGBoost Gain)
+================================================================================
+
+Top features by importance (Gain = average improvement in loss function):
+
+                Feature        Gain        Cover   Frequency
+                 <char>       <num>        <num>       <num>
+ 1:                hour 0.211324739 6.323476e-02 0.029215359
+ 2:         clarity_gap 0.071345612 1.004894e-01 0.085976628
+ 3:    volume_zscore_10 0.063378002 4.209721e-02 0.069282137
+ 4:     pred_prob_short 0.062827045 5.879682e-02 0.061769616
+ 5:      pred_prob_long 0.058424878 5.518048e-02 0.061769616
+ 6: volume_roll_mean_10 0.054588091 7.659767e-02 0.053422371
+ 7:                 obv 0.050776754 6.803207e-02 0.065943239
+ 8:              adx_14 0.047775003 5.130773e-02 0.062604341
+ 9:                 sar 0.039260124 5.328563e-02 0.055091820
+10:        volume_ratio 0.039006356 6.387934e-02 0.050083472
+11:              cci_20 0.038489804 3.421326e-02 0.044240401
+12:              atr_28 0.038398447 3.632558e-02 0.045075125
+13:              atr_14 0.036853072 3.711329e-02 0.046744574
+14:           atr_ratio 0.036679438 5.452058e-02 0.055091820
+15:              cmo_14 0.031988306 5.241006e-02 0.048414023
+16:              rsi_14 0.030568672 4.227001e-02 0.036727880
+17:              rsi_28 0.029636239 3.305851e-02 0.043405676
+18:            rsi_diff 0.029288433 2.963855e-02 0.040901503
+19:    volume_zscore_20 0.027895733 4.748784e-02 0.040901503
+20:     trade_direction 0.001495253 6.114542e-05 0.003338898
+                Feature        Gain        Cover   Frequency
+                 <char>       <num>        <num>       <num>
+
+
+Feature importance interpretation:
+- Higher Gain = feature contributes more to prediction accuracy
+- Cover = % of observations affected by splits on this feature
+- Frequency = % of splits that use this feature
+
+================================================================================
+6. THRESHOLD ANALYSIS (TEST DATA)
+================================================================================
+
+The meta-model outputs a probability. We need to choose a threshold above which
+we keep trades. Here's how different thresholds perform:
+
+   threshold n_trades pct_trades precision recall f1_score winrate       pnl
+       <num>    <int>      <num>     <num>  <num>    <num>   <num>     <num>
+1:      0.40     2432       89.0    0.4996 0.9441   0.6534  0.4996 -0.033690
+2:      0.45     2209       80.8    0.5088 0.8733   0.6430  0.5088  0.044922
+3:      0.50     1728       63.2    0.5012 0.6729   0.5745  0.5012 -0.052848
+4:      0.55     1003       36.7    0.4965 0.3869   0.4349  0.4965 -0.197814
+5:      0.60      446       16.3    0.5090 0.1764   0.2620  0.5090 -0.152757
+6:      0.65      144        5.3    0.5486 0.0614   0.1104  0.5486  0.031201
+7:      0.70       24        0.9    0.5000 0.0093   0.0183  0.5000  0.028495
+8:      0.75        3        0.1    0.6667 0.0016   0.0031  0.6667  0.001567
+
+
+Optimal Threshold (by F1 Score): 0.40
+  Precision: 0.4996 (of trades we keep, this % are profitable)
+  Recall: 0.9441 (of all profitable trades, we keep this %)
+  F1 Score: 0.6534 (harmonic mean of precision and recall)
+================================================================================Comprehensive analysis report saved: backtest_results/meta_labelling/GOLD_MINUTE_15_meta_analysis_report_enhanced_neutral.txt
+Summary saved: backtest_results/meta_labelling/GOLD_MINUTE_15_meta_summary_enhanced_neutral.txt
+
+=== STEP 7: VISUALIZATIONS ===
+Creating ROC curve...
+ROC curve saved: backtest_results/meta_labelling/GOLD_MINUTE_15_roc_curve_enhanced_neutral.png
+Creating threshold analysis plot...
+Threshold plot saved: backtest_results/meta_labelling/GOLD_MINUTE_15_threshold_plot_enhanced_neutral.png
+Creating feature importance plot...
+Feature importance saved: backtest_results/meta_labelling/GOLD_MINUTE_15_feature_importance_enhanced_neutral.png
+Creating PnL comparison chart...
+PnL comparison saved: backtest_results/meta_labelling/GOLD_MINUTE_15_pnl_comparison_enhanced_neutral.png
+
+=== META-LABELLING COMPLETE ===
+
+Output files saved to: backtest_results/meta_labelling
+  - Filtered signals CSV
+  - Threshold analysis CSV
+  - Meta-model (JSON)
+  - Summary text file
+  - ROC curve plot
+  - Threshold analysis plot
+  - Feature importance plot
+  - PnL comparison plot
+
+=== KEY RESULTS (TEST 2025) ===
+Training trades: 12583 | Test trades: 2733
+Test AUC: 0.5557
+Training CV AUC: 0.6414
+Optimal Threshold: 0.40
+Trades: 2733 -> 2432 (89.0% retained)
+Win Rate: 47.1% -> 50.0% (+2.9 pp)
+Total PnL: -0.103748 -> -0.033690
+m>          <num>         <num>
+1:     Short     1554    1322  -0.868668 -0.789361         0.4144        0.4478
+2:      Long     1179    1110   0.764920  0.755671         0.5454        0.5613
+
+================================================================================
+9. MONTHLY BREAKDOWN (TEST YEAR)
+================================================================================
+
+Month-by-month performance to check for consistency:
+
+      month n_total n_filtered pnl_total pnl_filtered pnl_rejected
+     <char>   <int>      <int>     <num>        <num>        <num>
+ 1: 2025-01     164        158  0.078303     0.080023    -0.001720
+ 2: 2025-02     141        128  0.091657     0.085270     0.006387
+ 3: 2025-03     234        225 -0.036549    -0.039557     0.003008
+ 4: 2025-04     283        250 -0.120219    -0.087882    -0.032336
+ 5: 2025-05     260        220  0.136522     0.125682     0.010839
+ 6: 2025-06     255        216  0.008627     0.010446    -0.001819
+ 7: 2025-07     242        179  0.002377     0.022352    -0.019976
+ 8: 2025-08     247        206  0.060190     0.045794     0.014396
+ 9: 2025-09     192        180 -0.113493    -0.094754    -0.018738
+10: 2025-10     284        252  0.033525     0.052886    -0.019362
+11: 2025-11     237        235 -0.062798    -0.064407     0.001609
+12: 2025-12     194        183 -0.181888    -0.169542    -0.012345
+    winrate_total winrate_filtered
+            <num>            <num>
+ 1:        0.5793           0.5886
+ 2:        0.5957           0.5938
+ 3:        0.5299           0.5244
+ 4:        0.4028           0.4440
+ 5:        0.4231           0.4727
+ 6:        0.4275           0.4815
+ 7:        0.4587           0.5587
+ 8:        0.4211           0.4417
+ 9:        0.4427           0.4500
+10:        0.4965           0.5357
+11:        0.5063           0.5021
+12:        0.4639           0.4590
+
+Look for:
+- Consistency: Does the filter help in most months?
+- Regime changes: Any months where filtered performs much worse?
+- Seasonality: Any patterns in when filtering helps most?
+
+================================================================================
+10. FEATURE STATISTICS (TEST SET)
+================================================================================
+
+Distribution of key features in test set:
+
+clarity_gap         : min=0.0000, median=0.0778, mean=0.0978, max=0.5008, sd=0.0789
+pred_prob_long      : min=0.1374, median=0.6976, mean=0.6907, max=0.9968, sd=0.1542
+pred_prob_short     : min=0.1758, median=0.7166, mean=0.7072, max=0.9935, sd=0.1617
+atr_ratio           : min=0.7430, median=0.9831, mean=0.9856, max=1.3345, sd=0.0907
+atr_14              : min=1.4888, median=4.8517, mean=5.5325, max=24.6249, sd=2.9004
+atr_28              : min=1.6607, median=4.8937, mean=5.5880, max=22.0515, sd=2.8244
+rsi_diff            : min=-15.4778, median=-0.1800, mean=-0.0948, max=15.5585, sd=5.9400
+rsi_14              : min=12.0792, median=52.8449, mean=52.6990, max=90.1159, sd=13.4217
+rsi_28              : min=21.9050, median=52.6105, mean=52.6042, max=79.0326, sd=9.0417
+volume_zscore_10    : min=-2.2824, median=1.3119, mean=1.0968, max=2.8179, sd=1.0524
+
+================================================================================
+11. QUESTIONS FOR ANALYSIS
+================================================================================
+
+Please analyze:
+
+1. MODEL QUALITY: Is the AUC of 0.5557 good enough for practical use?
+   What does this AUC imply about the meta-model's predictive ability?
+
+2. OVERFITTING: The CV AUC was 0.6414 and test AUC is 0.5557.
+   Does this suggest overfitting, underfitting, or appropriate fit?
+
+3. FEATURE IMPORTANCE: Which features are most predictive?
+   Do the important features make economic sense for predicting trade quality?
+
+4. THRESHOLD CHOICE: Is the F1-optimal threshold (0.40) the right choice,
+   or should we use a different threshold based on risk preferences?
+
+5. VALUE ADD: Does the meta-filter genuinely improve performance?
+   Win rate changed from 47.1% to 50.0%.
+   Is this improvement statistically meaningful or could it be noise?
+
+6. PRACTICAL RECOMMENDATIONS:
+   - Should we use this meta-filter in production?
+   - What threshold would you recommend?
+   - Are there any concerning patterns in the monthly breakdown?
+   - What additional features might improve the meta-model?
+
+================================================================================
+END OF REPORT
+================================================================================
