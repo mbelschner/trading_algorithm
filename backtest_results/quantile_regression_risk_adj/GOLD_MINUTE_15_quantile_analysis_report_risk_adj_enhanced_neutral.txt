@@ -1,0 +1,257 @@
+================================================================================
+      QUANTILE REGRESSION META-LABELLING ANALYSIS REPORT (RISK-ADJUSTED)
+================================================================================
+
+================================================================================
+1. CONTEXT & APPROACH
+================================================================================
+
+Asset: GOLD (Gold futures)
+Timeframe: MINUTE_15 (15-minute bars)
+Test Year: 2025 (out-of-sample)
+Training Period: All data before 2025
+
+APPROACH:
+Quantile Regression predicting the 75th percentile of RISK-ADJUSTED PnL.
+Risk-Adjusted PnL = raw_pnl / ATR_14
+This normalizes returns by current volatility, making predictions
+more stable across different market regimes.
+
+Feature selection via Boruta algorithm (Random Forest based).
+
+XGBoost Parameters:
+  objective: reg:quantileerror
+  quantile_alpha: 0.75
+  max_depth: 4
+  eta: 0.020
+  min_child_weight: 30
+
+================================================================================
+2. DATA SUMMARY
+================================================================================
+
+Training trades: 11,534 (before 2025)
+Test trades: 2,503 (2025)
+
+Training set performance (Risk-Adjusted):
+  Mean RA PnL: 0.0002
+  Std RA PnL:  0.0008
+  Win Rate: 63.5%
+
+Test set performance (Risk-Adjusted):
+  Mean RA PnL: -0.0000
+  Std RA PnL:  0.0004
+  Win Rate: 49.2%
+
+================================================================================
+3. BORUTA FEATURE SELECTION
+================================================================================
+
+Candidate features tested: 30
+Confirmed features: 30
+Tentative features: 0
+Rejected features: 0
+
+Selected features:
+  - clarity_gap
+  - dominant_prob
+  - pred_prob_long
+  - pred_prob_short
+  - atr_14
+  - atr_14_pct
+  - bb_bandwidth_20
+  - vhf_28
+  - choppiness_14
+  - adx_14
+  - di_diff_14
+  - ema_21_slope
+  - aroon_oscillator
+  - ichimoku_position
+  - donchian_position_20
+  - rsi_14
+  - rsi_14_slope
+  - stoch_k
+  - stoch_k_d_diff
+  - roc_10
+  - momentum_10
+  - dpo_20
+  - volume_ratio
+  - obv_slope
+  - bb_pct_20
+  - kc_position_20
+  - hour
+  - day_of_week
+  - session_overlap
+  - is_long
+
+
+Boruta Importance (Top 20):
+            feature  meanImp  decision
+             <char>    <num>    <fctr>
+ 1:     clarity_gap 34.36640 Confirmed
+ 2:            hour 28.58321 Confirmed
+ 3:   dominant_prob 27.69680 Confirmed
+ 4: pred_prob_short 16.43225 Confirmed
+ 5:  pred_prob_long 14.69100 Confirmed
+ 6: bb_bandwidth_20 14.32049 Confirmed
+ 7:    rsi_14_slope 13.99411 Confirmed
+ 8:    volume_ratio 13.87288 Confirmed
+ 9:       obv_slope 13.38626 Confirmed
+10:    ema_21_slope 12.70490 Confirmed
+11:          dpo_20 12.38367 Confirmed
+12:      atr_14_pct 12.37765 Confirmed
+13:          vhf_28 11.80860 Confirmed
+14:          rsi_14 11.79990 Confirmed
+15:      di_diff_14 11.75781 Confirmed
+16:  kc_position_20 11.73605 Confirmed
+17:         stoch_k 11.32443 Confirmed
+18:       bb_pct_20 10.99784 Confirmed
+19:  stoch_k_d_diff 10.99322 Confirmed
+20:          atr_14 10.90090 Confirmed
+            feature  meanImp  decision
+             <char>    <num>    <fctr>
+
+================================================================================
+4. MODEL PERFORMANCE
+================================================================================
+
+Spearman Correlation (Risk-Adjusted Target):
+  Training: 0.1479
+  Test:     0.0121
+  Diff:     -0.1358
+
+Spearman Correlation (Raw PnL - what we actually trade):
+  Test:     -0.0069
+
+Interpretation:
+  0.00: No relationship
+  0.10: Weak positive
+  0.20: Moderate (good for finance)
+  0.30+: Strong (rare)
+
+================================================================================
+5. XGBOOST FEATURE IMPORTANCE
+================================================================================
+
+                 Feature         Gain        Cover   Frequency
+                  <char>        <num>        <num>       <num>
+ 1:                 hour 0.2467378038 0.1579614444 0.065005417
+ 2:         volume_ratio 0.1484519278 0.1512807050 0.091368725
+ 3:               atr_14 0.1175990456 0.1352452873 0.138678223
+ 4:           atr_14_pct 0.1172520233 0.1159270123 0.120621163
+ 5:         rsi_14_slope 0.0611497045 0.0904812641 0.089563019
+ 6:        dominant_prob 0.0487902164 0.0496814108 0.041170098
+ 7:      pred_prob_short 0.0328974142 0.0553549856 0.045142651
+ 8:      session_overlap 0.0293250819 0.0200098190 0.013362225
+ 9:      bb_bandwidth_20 0.0232313454 0.0393022056 0.033947273
+10:          clarity_gap 0.0223807863 0.0223482948 0.044781510
+11:       kc_position_20 0.0161080846 0.0230181359 0.025641026
+12:               vhf_28 0.0127336372 0.0132856740 0.026724449
+13:               adx_14 0.0125296752 0.0211737087 0.025279884
+14:       stoch_k_d_diff 0.0120795551 0.0091244737 0.028530155
+15:       pred_prob_long 0.0116337440 0.0129167265 0.020585049
+16:        choppiness_14 0.0112557695 0.0106201061 0.023835320
+17:               roc_10 0.0103615720 0.0136681082 0.020585049
+18:               rsi_14 0.0095385965 0.0076615505 0.016251354
+19:           di_diff_14 0.0094314895 0.0106774635 0.016973637
+20:              stoch_k 0.0091560916 0.0088006371 0.018057060
+21:     aroon_oscillator 0.0065729325 0.0031758935 0.015529072
+22:            bb_pct_20 0.0059638338 0.0090437083 0.014445648
+23:            obv_slope 0.0057728278 0.0045268923 0.018779343
+24: donchian_position_20 0.0054097170 0.0028960825 0.012639942
+25:         ema_21_slope 0.0045091473 0.0029827387 0.009389671
+26:          day_of_week 0.0035387271 0.0036970706 0.008306248
+27:               dpo_20 0.0025454796 0.0017597864 0.006139401
+28:          momentum_10 0.0019913773 0.0010316577 0.005778259
+29:              is_long 0.0006387600 0.0016292596 0.001444565
+30:    ichimoku_position 0.0004136331 0.0007178973 0.001444565
+                 Feature         Gain        Cover   Frequency
+                  <char>        <num>        <num>       <num>
+
+================================================================================
+6. BINNING ANALYSIS
+================================================================================
+
+   pred_bin     n mean_pred mean_pnl_risk_adj mean_pnl_raw win_rate
+      <int> <int>     <num>             <num>        <num>    <num>
+1:        1   501     6e-04                 0     -8.5e-05   0.4611
+2:        2   501     7e-04                 0     -5.3e-05   0.4870
+3:        3   501     7e-04                 0      3.8e-05   0.5150
+4:        4   500     8e-04                 0      6.5e-05   0.5220
+5:        5   500     9e-04                 0     -9.7e-05   0.4760
+
+
+Monotonicity (Risk-Adj): FAILED
+Monotonicity (Raw PnL): FAILED
+Spread Risk-Adj (Bin 5 - Bin 1): 0.0000
+Spread Raw (Bin 5 - Bin 1): -0.000012
+
+================================================================================
+7. THRESHOLD ANALYSIS
+================================================================================
+
+   threshold n_trades pct_trades mean_pnl_risk_adj mean_pnl_raw win_rate
+       <num>    <int>      <num>             <num>        <num>    <num>
+1:     5e-04     2499       99.8                 0     -2.5e-05   0.4930
+2:     7e-04     2002       80.0                 0     -1.2e-05   0.5000
+3:     7e-04     1499       59.9                 0      5.0e-06   0.5050
+4:     8e-04     1001       40.0                 0     -2.1e-05   0.4985
+5:     8e-04      501       20.0                 0     -9.6e-05   0.4770
+
+
+Recommended threshold: 0.0007
+
+================================================================================
+8. FILTERED VS UNFILTERED
+================================================================================
+
+                    UNFILTERED    FILTERED      REJECTED
+----------------------------------------------------------------- 
+Trades:             2503          1499          1004
+Mean RA PnL:        -0.0000       -0.0000       -0.0000
+Mean Raw PnL:       -0.000026     0.000005      -0.000073
+Total Raw PnL:      -0.066054     0.007536      -0.073590
+Win Rate:           49.2         %50.5         %47.3%
+
+================================================================================
+9. COMPARISON: RISK-ADJUSTED VS RAW APPROACH
+================================================================================
+
+RATIONALE FOR RISK-ADJUSTED TARGET:
+- Raw PnL varies greatly with market volatility
+- In high-vol periods: large returns but also large losses
+- In low-vol periods: small but potentially more consistent returns
+- Risk-adjusted (PnL/ATR) normalizes for volatility regime
+- Should produce more stable predictions across market conditions
+
+EXPECTED BENEFITS:
+- Better generalization across different volatility regimes
+- More consistent feature importance
+- Potentially better out-of-sample performance
+
+POTENTIAL DRAWBACKS:
+- May filter out high-vol/high-return opportunities
+- Correlation with raw PnL may be lower
+- Need to track both metrics for evaluation
+
+================================================================================
+10. QUESTIONS FOR ANALYSIS
+================================================================================
+
+1. Is Spearman correlation of 0.0121 (risk-adj) meaningful?
+
+2. How does it compare to raw PnL correlation (-0.0069)?
+
+3. Does the binning show proper monotonicity for BOTH metrics?
+
+4. Overfitting check: Train=0.1479 vs Test=0.0121
+
+5. Do the selected features differ from the raw PnL model?
+
+6. Is the risk-adjusted approach better for filtering trades?
+
+7. Recommendations: use risk-adjusted or raw PnL model?
+
+================================================================================
+END OF REPORT
+================================================================================

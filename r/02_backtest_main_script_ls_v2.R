@@ -390,15 +390,23 @@ meta_cols <- c("datetime", "year", "label", "label_binary", "sample_weight",
                "n_concurrent", "realized_return_adj", "log_return",
                "open", "high", "low", "close", "volume")
 
-# Additional exclusions: return features (lookahead) and session/hour features (for meta-labeling)
+# Additional exclusions: return features (lookahead), session/hour features, and ATR features (for meta-labeling)
+# ATR exclusion uses pattern matching below since there are many derived features
 excluded_features <- c(
   # Return features (lookahead bias)
   "log_return", "realized_return", "realized_return_adj",
-   # Session/hour features (reserved for meta-labeling)
+  # Session/hour features (reserved for meta-labeling)
   "hour", "hour_sin", "hour_cos", "hour_open", "hour_high", "hour_low",
   "hour_close", "hour_volume", "hour_close_mean", "hour_close_sd",
   "session_london", "session_ny", "session_asia", "session_overlap"
 )
+
+# ATR features (reserved for meta-labeling / risk adjustment) - use pattern matching
+atr_features <- names(dt_train_long)[grepl("^atr_|_atr_", names(dt_train_long), ignore.case = TRUE)]
+cat(sprintf("ATR features found and excluded: %d\n", length(atr_features)))
+
+# Combine all exclusions
+excluded_features <- c(excluded_features, atr_features)
 
 all_feature_cols <- setdiff(names(dt_train_long), c(meta_cols, excluded_features))
 cat(sprintf("Total features available: %d\n", length(all_feature_cols)))
@@ -537,10 +545,10 @@ cat("\n=== STEP 7.5a: SIMPLE PARAMETER GRID SEARCH (LONG MODEL) ===\n")
 # Define parameter grid
 param_grid <- expand.grid(
   max_depth = c(3, 4, 5),
-  eta = c(0.03, 0.05, 0.1),
+  eta = c(0.05, 0.1),
   gamma = c(0, 0.1, 0.2),
   lambda = c(1.0, 1.5, 2.0),
-  min_child_weight = c(5, 10, 15),
+  min_child_weight = c(5, 10, 15, 20),
   stringsAsFactors = FALSE
 )
 
@@ -715,8 +723,8 @@ fwrite(grid_results_long, file.path(grid_output_path, paste0(EPIC, "_", INTERVAL
 cat(sprintf("\n\n✓ Grid search complete. Results saved to:\n"))
 cat(sprintf("  %s\n", file.path(grid_output_path, paste0(EPIC, "_", INTERVAL, "_long_grid_results.csv"))))
 
-# Find best parameters (based on average rank across 4 metrics)
-best_idx_long <- which.min(grid_results_long$avg_rank)
+# Find best parameters (best test AUC))
+best_idx_long <- which.max(grid_results_long$test_auc)
 best_params_long <- grid_results_long[best_idx_long, ]
 
 cat("\n=== BEST PARAMETERS (LONG MODEL) ===\n")
@@ -729,10 +737,10 @@ cat(sprintf("  min_child_weight: %d\n", best_params_long$min_child_weight))
 cat(sprintf("  Average Rank:     %.2f (lower is better)\n\n", best_params_long$avg_rank))
 
 cat("Individual Ranks:\n")
-cat(sprintf("  Train AUC Rank:       %d\n", best_params_long$rank_train_auc))
-cat(sprintf("  Train Precision Rank: %d\n", best_params_long$rank_train_precision))
-cat(sprintf("  Test AUC Rank:        %d\n", best_params_long$rank_test_auc))
-cat(sprintf("  Test Precision Rank:  %d\n\n", best_params_long$rank_test_precision))
+cat(sprintf("  Train AUC Rank:       %.0f\n", best_params_long$rank_train_auc))
+cat(sprintf("  Train Precision Rank: %.0f\n", best_params_long$rank_train_precision))
+cat(sprintf("  Test AUC Rank:        %.0f\n", best_params_long$rank_test_auc))
+cat(sprintf("  Test Precision Rank:  %.0f\n\n", best_params_long$rank_test_precision))
 
 cat("Training Performance:\n")
 cat(sprintf("  Train AUC:       %.4f\n", best_params_long$train_auc))
@@ -1266,8 +1274,8 @@ fwrite(grid_results_short, file.path(grid_output_path, paste0(EPIC, "_", INTERVA
 cat(sprintf("\n\n✓ Grid search complete. Results saved to:\n"))
 cat(sprintf("  %s\n", file.path(grid_output_path, paste0(EPIC, "_", INTERVAL, "_short_grid_results.csv"))))
 
-# Find best parameters (based on average rank across 4 metrics)
-best_idx_short <- which.min(grid_results_short$avg_rank)
+# Find best parameters (based on best Test AUC)
+best_idx_short <- which.max(grid_results_short$test_auc)
 best_params_short <- grid_results_short[best_idx_short, ]
 
 cat("\n=== BEST PARAMETERS (SHORT MODEL) ===\n")
@@ -1280,10 +1288,10 @@ cat(sprintf("  min_child_weight: %d\n", best_params_short$min_child_weight))
 cat(sprintf("  Average Rank:     %.2f (lower is better)\n\n", best_params_short$avg_rank))
 
 cat("Individual Ranks:\n")
-cat(sprintf("  Train AUC Rank:       %d\n", best_params_short$rank_train_auc))
-cat(sprintf("  Train Precision Rank: %d\n", best_params_short$rank_train_precision))
-cat(sprintf("  Test AUC Rank:        %d\n", best_params_short$rank_test_auc))
-cat(sprintf("  Test Precision Rank:  %d\n\n", best_params_short$rank_test_precision))
+cat(sprintf("  Train AUC Rank:       %.0f\n", best_params_short$rank_train_auc))
+cat(sprintf("  Train Precision Rank: %.0f\n", best_params_short$rank_train_precision))
+cat(sprintf("  Test AUC Rank:        %.0f\n", best_params_short$rank_test_auc))
+cat(sprintf("  Test Precision Rank:  %.0f\n\n", best_params_short$rank_test_precision))
 
 cat("Training Performance:\n")
 cat(sprintf("  Train AUC:       %.4f\n", best_params_short$train_auc))

@@ -1,0 +1,225 @@
+================================================================================
+              QUANTILE REGRESSION META-LABELLING ANALYSIS REPORT
+                    For Analysis by Claude (LLM Interpretation)
+================================================================================
+
+================================================================================
+1. CONTEXT & APPROACH
+================================================================================
+
+Asset: GOLD (Gold futures)
+Timeframe: MINUTE_15 (15-minute bars)
+Test Year: 2025 (out-of-sample)
+Training Period: All data before 2025
+
+APPROACH:
+Quantile Regression predicting the 75th percentile of PnL distribution.
+Feature selection via Boruta algorithm (Random Forest based).
+
+XGBoost Parameters:
+  objective: reg:quantileerror
+  quantile_alpha: 0.75
+  max_depth: 4
+  eta: 0.020
+  min_child_weight: 30
+
+================================================================================
+2. DATA SUMMARY
+================================================================================
+
+Training trades: 11,534 (before 2025)
+Test trades: 2,503 (2025)
+
+Training set performance:
+  Mean PnL: 0.000440
+  Win Rate: 63.5%
+
+Test set performance:
+  Mean PnL: -0.000026
+  Win Rate: 49.2%
+
+================================================================================
+3. BORUTA FEATURE SELECTION
+================================================================================
+
+Candidate features tested: 30
+Confirmed features: 29
+Tentative features: 1
+Rejected features: 0
+
+Selected features:
+  - clarity_gap
+  - dominant_prob
+  - pred_prob_long
+  - pred_prob_short
+  - atr_14
+  - atr_14_pct
+  - bb_bandwidth_20
+  - vhf_28
+  - choppiness_14
+  - adx_14
+  - di_diff_14
+  - ema_21_slope
+  - aroon_oscillator
+  - ichimoku_position
+  - donchian_position_20
+  - rsi_14
+  - rsi_14_slope
+  - stoch_k
+  - stoch_k_d_diff
+  - roc_10
+  - momentum_10
+  - dpo_20
+  - volume_ratio
+  - bb_pct_20
+  - kc_position_20
+  - hour
+  - day_of_week
+  - session_overlap
+  - is_long
+  - obv_slope
+
+
+Boruta Importance (Top 20):
+             feature   meanImp  decision
+              <char>     <num>    <fctr>
+ 1:      clarity_gap 34.503454 Confirmed
+ 2:       atr_14_pct 27.265589 Confirmed
+ 3:           atr_14 19.806091 Confirmed
+ 4:             hour 19.620929 Confirmed
+ 5:    dominant_prob 18.897908 Confirmed
+ 6:  bb_bandwidth_20 18.548581 Confirmed
+ 7:  pred_prob_short 16.694651 Confirmed
+ 8:           adx_14 12.426740 Confirmed
+ 9:    choppiness_14 12.086310 Confirmed
+10:   pred_prob_long 11.814556 Confirmed
+11:           vhf_28 11.531440 Confirmed
+12:     rsi_14_slope 10.390054 Confirmed
+13:     volume_ratio 10.009408 Confirmed
+14:   stoch_k_d_diff  9.742824 Confirmed
+15:          stoch_k  9.538794 Confirmed
+16: aroon_oscillator  9.157716 Confirmed
+17:       di_diff_14  9.127067 Confirmed
+18:           roc_10  8.782491 Confirmed
+19:      momentum_10  8.557799 Confirmed
+20:     ema_21_slope  7.224672 Confirmed
+             feature   meanImp  decision
+              <char>     <num>    <fctr>
+
+================================================================================
+4. MODEL PERFORMANCE
+================================================================================
+
+Spearman Correlation:
+  Training: 0.2254
+  Test:     0.0038
+  Diff:     -0.2217
+
+Interpretation:
+  0.00: No relationship
+  0.10: Weak positive
+  0.20: Moderate (good for finance)
+  0.30+: Strong (rare)
+
+================================================================================
+5. XGBOOST FEATURE IMPORTANCE
+================================================================================
+
+                 Feature         Gain        Cover    Frequency
+                  <char>        <num>        <num>        <num>
+ 1:           atr_14_pct 5.255623e-01 3.569833e-01 0.2025316456
+ 2:               atr_14 1.272182e-01 8.075924e-02 0.0727848101
+ 3:                 hour 1.054138e-01 1.259435e-01 0.0963431786
+ 4:         volume_ratio 6.810783e-02 1.077610e-01 0.1195499297
+ 5:         rsi_14_slope 3.294810e-02 9.103251e-02 0.0981012658
+ 6:        dominant_prob 2.531758e-02 4.382459e-02 0.0562587904
+ 7:          clarity_gap 2.020804e-02 1.910333e-02 0.0488748242
+ 8:      bb_bandwidth_20 1.663982e-02 2.293268e-02 0.0235583685
+ 9:      pred_prob_short 9.310597e-03 2.046249e-02 0.0298874824
+10:      session_overlap 7.778067e-03 9.039728e-03 0.0144163150
+11:         ema_21_slope 6.824557e-03 1.196416e-02 0.0186357243
+12:            bb_pct_20 6.744956e-03 1.825594e-02 0.0232067511
+13:       kc_position_20 5.786911e-03 1.418125e-02 0.0225035162
+14:               adx_14 5.586364e-03 1.603947e-02 0.0207454290
+15:       pred_prob_long 5.456477e-03 9.937048e-03 0.0203938115
+16:               roc_10 4.155160e-03 1.039874e-02 0.0130098453
+17:               vhf_28 3.504739e-03 3.574081e-03 0.0126582278
+18:               dpo_20 2.995460e-03 5.945790e-03 0.0109001406
+19:       stoch_k_d_diff 2.891857e-03 4.998843e-03 0.0161744023
+20:               rsi_14 2.878519e-03 3.379294e-03 0.0109001406
+21:           di_diff_14 2.544475e-03 4.957280e-03 0.0123066104
+22:        choppiness_14 2.494772e-03 3.766075e-03 0.0101969058
+23:              stoch_k 2.319458e-03 2.158313e-03 0.0094936709
+24:     aroon_oscillator 2.146687e-03 1.962751e-03 0.0101969058
+25:          day_of_week 1.769383e-03 5.933073e-03 0.0059774965
+26: donchian_position_20 1.309150e-03 1.157242e-03 0.0073839662
+27:          momentum_10 1.261450e-03 2.286568e-03 0.0059774965
+28:            obv_slope 5.271344e-04 8.501740e-04 0.0045710267
+29:    ichimoku_position 1.997265e-04 3.475447e-04 0.0017580872
+30:              is_long 9.845046e-05 6.404995e-05 0.0007032349
+                 Feature         Gain        Cover    Frequency
+                  <char>        <num>        <num>        <num>
+
+================================================================================
+6. BINNING ANALYSIS
+================================================================================
+
+   pred_bin     n mean_pred  mean_pnl win_rate
+      <int> <int>     <num>     <num>    <num>
+1:        1   501  0.001340 -0.000117   0.4571
+2:        2   501  0.001930  0.000032   0.5190
+3:        3   501  0.002446 -0.000066   0.4790
+4:        4   500  0.003026 -0.000002   0.5020
+5:        5   500  0.003753  0.000020   0.5040
+
+
+Monotonicity: FAILED
+Spread (Bin 5 - Bin 1): 0.000137
+
+================================================================================
+7. THRESHOLD ANALYSIS
+================================================================================
+
+   threshold n_trades pct_trades mean_pnl win_rate
+       <num>    <int>      <num>    <num>    <num>
+1:  0.000852     2502        100 -2.7e-05   0.4920
+2:  0.001691     2002         80 -4.0e-06   0.5010
+3:  0.002170     1501         60 -1.6e-05   0.4950
+4:  0.002749     1001         40  1.2e-05   0.5035
+5:  0.003307      501         20  1.5e-05   0.5030
+
+
+Recommended threshold: 0.002749
+
+================================================================================
+8. FILTERED VS UNFILTERED
+================================================================================
+
+                    UNFILTERED    FILTERED      REJECTED
+----------------------------------------------------------------- 
+Trades:             2503          1001          1502
+Mean PnL:           -0.000026     0.000012      -0.000052
+Total PnL:          -0.066054     0.011536      -0.077591
+Win Rate:           49.2         %50.3         %48.5%
+
+================================================================================
+9. QUESTIONS FOR ANALYSIS
+================================================================================
+
+1. Is Spearman correlation of 0.0038 meaningful for trading?
+
+2. Does the binning show proper monotonicity?
+
+3. Overfitting check: Train=0.2254 vs Test=0.0038
+
+4. Do the selected features make economic sense?
+
+5. Is threshold 0.002749 optimal?
+
+6. Does filtering add practical value?
+
+7. Recommendations for production use?
+
+================================================================================
+END OF REPORT
+================================================================================

@@ -9,8 +9,7 @@
 #
 # APPROACH:
 # - XGBoost with quantile_alpha = 0.75 predicts Q75 of PnL distribution
-# - Features engineered on FULL price data, then merged with labels
-# - Incremental feature selection to avoid overfitting
+# - Boruta for feature selection
 # - Evaluation via Spearman correlation and monotonic binning
 #
 # REQUIRES:
@@ -35,8 +34,19 @@ pacman::p_load(
   scales,          # Plot formatting
   TTR,             # Technical indicators
   zoo,             # Rolling functions
-  jsonlite         # Read JSON files
+  jsonlite,        # Read JSON files
+  dplyr,           # ntile function
+  Boruta,          # Feature selection
+  ranger,          # Random forest for Boruta
+  doParallel,      # Parallel processing
+  foreach          # Parallel foreach
 )
+
+# Setup parallel processing
+n_cores <- parallel::detectCores() - 1  # Leave one core free
+cat(sprintf("Setting up parallel processing with %d cores...\n", n_cores))
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
 
 # ===== PATHS =================================================================
 
@@ -66,11 +76,11 @@ QUANTILE_ALPHA <- 0.75  # Predict 75th percentile (upside)
 xgb_params <- list(
   objective = "reg:quantileerror",
   quantile_alpha = QUANTILE_ALPHA,
-  max_depth = 3,
-  eta = 0.03,
+  max_depth = 4,
+  eta = 0.02,
   subsample = 0.7,
   colsample_bytree = 0.7,
-  min_child_weight = 50
+  min_child_weight = 30
 )
 
 cat(sprintf("\nConfiguration:\n"))
@@ -199,14 +209,14 @@ cat("\n=== STEP 5: GENERATE PRIMARY MODEL PREDICTIONS ===\n")
 cat("Preparing Long model features...\n")
 missing_long <- setdiff(features_long, names(dt_merged))
 if (length(missing_long) > 0) {
-  cat(sprintf("WARNING: Missing Long features: %s\n", paste(missing_long, collapse = ", ")))
+  cat(sprintf("WARNING: Missing Long features: %d\n", length(missing_long)))
 }
 available_features_long <- intersect(features_long, names(dt_merged))
 
 cat("Preparing Short model features...\n")
 missing_short <- setdiff(features_short, names(dt_merged))
 if (length(missing_short) > 0) {
-  cat(sprintf("WARNING: Missing Short features: %s\n", paste(missing_short, collapse = ", ")))
+  cat(sprintf("WARNING: Missing Short features: %d\n", length(missing_short)))
 }
 available_features_short <- intersect(features_short, names(dt_merged))
 
@@ -236,7 +246,6 @@ dt_merged[, signal_long := as.integer(pred_prob_long > LONG_THRESHOLD)]
 dt_merged[, signal_short := as.integer(pred_prob_short > SHORT_THRESHOLD)]
 
 # Combined signal: Long = 1, Short = -1, Neutral = 0
-# If both fire, use the stronger probability
 dt_merged[, signal := fifelse(
   signal_long == 1 & signal_short == 0, 1L,
   fifelse(
@@ -257,11 +266,7 @@ cat(sprintf("  Long signals: %d\n", sum(dt_trades$signal == 1)))
 cat(sprintf("  Short signals: %d\n", sum(dt_trades$signal == -1)))
 
 # Calculate PnL
-# For Long: pnl = log_return (positive return = profit)
-# For Short: pnl = -log_return (negative return = profit)
 dt_trades[, pnl := fifelse(signal == 1, log_return, -log_return)]
-
-# Trade direction for clarity
 dt_trades[, trade_direction := fifelse(signal == 1, "Long", "Short")]
 
 cat(sprintf("\nPnL Summary:\n"))
@@ -272,15 +277,25 @@ cat(sprintf("  Win Rate: %.1f%%\n", 100 * mean(dt_trades$pnl > 0)))
 
 cat("\n=== STEP 7: COMPUTE META-FEATURES ===\n")
 
-# --- 7.1: Clarity Gap ---
-dt_trades[, clarity_gap := abs(pred_prob_long - pred_prob_short)]
-cat("  clarity_gap: abs(pred_prob_long - pred_prob_short)\n")
+setorder(dt_trades, datetime)
 
-# --- 7.2: ATR percentile (from existing ATR) ---
+# --- 7.1: Signal Quality Features (from primary models) ---
+cat("\n--- Signal Quality Features ---\n")
+
+dt_trades[, clarity_gap := abs(pred_prob_long - pred_prob_short)]
+dt_trades[, dominant_prob := pmax(pred_prob_long, pred_prob_short)]
+dt_trades[, prob_sum := pred_prob_long + pred_prob_short]
+dt_trades[, prob_diff := pred_prob_long - pred_prob_short]
+
+cat("  clarity_gap, dominant_prob, prob_sum, prob_diff\n")
+
+# --- 7.2: Volatility Features ---
+cat("\n--- Volatility Features ---\n")
+
+# ATR-based
 if ("atr_14" %in% names(dt_trades)) {
-  # Calculate percentile within rolling window on full data first
-  setorder(dt_merged, datetime)
-  dt_merged[, atr_percentile := {
+  # ATR percentile (rolling)
+  dt_trades[, atr_percentile := {
     n <- .N
     result <- rep(NA_real_, n)
     for (i in 60:n) {
@@ -289,82 +304,180 @@ if ("atr_14" %in% names(dt_trades)) {
     }
     result
   }]
-
-  # Merge back to trades
-  dt_trades <- merge(dt_trades, dt_merged[, .(datetime, atr_percentile)],
-                     by = "datetime", all.x = TRUE, suffixes = c("", "_new"))
-  if ("atr_percentile_new" %in% names(dt_trades)) {
-    dt_trades[, atr_percentile := atr_percentile_new]
-    dt_trades[, atr_percentile_new := NULL]
-  }
-  cat("  atr_percentile: ATR_14 percentile in 60-bar window\n")
-} else {
-  dt_trades[, atr_percentile := NA_real_]
-  cat("  WARNING: atr_14 not found, atr_percentile set to NA\n")
+  cat("  atr_percentile: ATR_14 rolling percentile\n")
 }
 
-# --- 7.3: ATR trend ---
-if ("atr_14" %in% names(dt_trades)) {
-  # Calculate on full data
-  setorder(dt_merged, datetime)
-  dt_merged[, tr := pmax(high - low, abs(high - shift(close, 1)), abs(low - shift(close, 1)))]
-  dt_merged[, atr_5 := frollmean(tr, n = 5, fill = NA, align = "right")]
-  dt_merged[, atr_20 := frollmean(tr, n = 20, fill = NA, align = "right")]
-  dt_merged[, atr_trend := atr_5 / atr_20]
-
-  # Merge to trades
-  dt_trades <- merge(dt_trades, dt_merged[, .(datetime, atr_trend)],
-                     by = "datetime", all.x = TRUE, suffixes = c("", "_new"))
-  if ("atr_trend_new" %in% names(dt_trades)) {
-    dt_trades[, atr_trend := atr_trend_new]
-    dt_trades[, atr_trend_new := NULL]
-  }
-  cat("  atr_trend: ATR_5 / ATR_20\n")
+if ("atr_14" %in% names(dt_trades) && "atr_28" %in% names(dt_trades)) {
+  dt_trades[, atr_ratio := atr_14 / atr_28]
+  cat("  atr_ratio: ATR_14 / ATR_28\n")
 }
 
-# --- 7.4: ADX (should exist in features) ---
+# Bollinger Band width
+if ("bb_bandwidth_20" %in% names(dt_trades)) {
+  dt_trades[, bb_width_percentile := {
+    n <- .N
+    result <- rep(NA_real_, n)
+    for (i in 60:n) {
+      window <- bb_bandwidth_20[(i-59):i]
+      result[i] <- sum(window <= bb_bandwidth_20[i], na.rm = TRUE) / sum(!is.na(window))
+    }
+    result
+  }]
+  cat("  bb_width_percentile: BB width rolling percentile\n")
+}
+
+# Keltner Channel width
+if (all(c("kc_upper_20", "kc_lower_20", "kc_mid_20") %in% names(dt_trades))) {
+  dt_trades[, kc_width := (kc_upper_20 - kc_lower_20) / kc_mid_20]
+  cat("  kc_width: Keltner Channel width\n")
+}
+
+# VHF (Vertical Horizontal Filter)
+if ("vhf_28" %in% names(dt_trades)) {
+  cat("  vhf_28: Already available\n")
+}
+
+# Choppiness
+if ("choppiness_14" %in% names(dt_trades)) {
+  cat("  choppiness_14: Already available\n")
+}
+
+# --- 7.3: Trend Features ---
+cat("\n--- Trend Features ---\n")
+
+# ADX and components
 if ("adx_14" %in% names(dt_trades)) {
-  cat("  adx_14: Already available from features\n")
-} else {
-  dt_trades[, adx_14 := NA_real_]
-  cat("  WARNING: adx_14 not found\n")
+  cat("  adx_14: Already available\n")
 }
 
-# --- 7.5: Volume ratio ---
+if ("di_diff_14" %in% names(dt_trades)) {
+  cat("  di_diff_14: Already available\n")
+}
+
+# EMA slopes and distances
+ema_features <- c("ema_9_slope", "ema_21_slope", "ema_50_slope",
+                  "dist_ema_9", "dist_ema_21", "dist_ema_50")
+available_ema <- intersect(ema_features, names(dt_trades))
+if (length(available_ema) > 0) {
+  cat(sprintf("  EMA features: %s\n", paste(available_ema, collapse = ", ")))
+}
+
+# EMA cross signals
+if ("ema_9_21_cross" %in% names(dt_trades)) {
+  cat("  ema_9_21_cross: Already available\n")
+}
+if ("ema_21_50_cross" %in% names(dt_trades)) {
+  cat("  ema_21_50_cross: Already available\n")
+}
+
+# Aroon
+if (all(c("aroon_up", "aroon_down", "aroon_oscillator") %in% names(dt_trades))) {
+  cat("  aroon_up, aroon_down, aroon_oscillator: Already available\n")
+}
+
+# Ichimoku
+if ("ichimoku_position" %in% names(dt_trades)) {
+  cat("  ichimoku_position: Already available\n")
+}
+
+# SAR signal
+if ("sar_signal" %in% names(dt_trades)) {
+  cat("  sar_signal: Already available\n")
+}
+
+# Donchian position
+if ("donchian_position_20" %in% names(dt_trades)) {
+  cat("  donchian_position_20: Already available\n")
+}
+
+# --- 7.4: Momentum Features ---
+cat("\n--- Momentum Features ---\n")
+
+# RSI
+if (all(c("rsi_14", "rsi_28") %in% names(dt_trades))) {
+  dt_trades[, rsi_diff := rsi_14 - rsi_28]
+  cat("  rsi_14, rsi_28, rsi_diff\n")
+}
+
+# Stochastic
+if (all(c("stoch_k", "stoch_d") %in% names(dt_trades))) {
+  cat("  stoch_k, stoch_d: Already available\n")
+}
+if ("stoch_k_d_diff" %in% names(dt_trades)) {
+  cat("  stoch_k_d_diff: Already available\n")
+}
+
+# ROC (Rate of Change)
+roc_features <- c("roc_5", "roc_10", "roc_20")
+available_roc <- intersect(roc_features, names(dt_trades))
+if (length(available_roc) > 0) {
+  cat(sprintf("  ROC features: %s\n", paste(available_roc, collapse = ", ")))
+}
+
+# Momentum
+mom_features <- c("momentum_5", "momentum_10", "momentum_20")
+available_mom <- intersect(mom_features, names(dt_trades))
+if (length(available_mom) > 0) {
+  cat(sprintf("  Momentum features: %s\n", paste(available_mom, collapse = ", ")))
+}
+
+# DPO
+if ("dpo_20" %in% names(dt_trades)) {
+  cat("  dpo_20: Already available\n")
+}
+
+# --- 7.5: Volume Features ---
+cat("\n--- Volume Features ---\n")
+
 if ("volume_ratio" %in% names(dt_trades)) {
-  cat("  volume_ratio: Already available from features\n")
-} else if ("volume" %in% names(dt_merged)) {
-  setorder(dt_merged, datetime)
-  dt_merged[, vol_sma_20 := frollmean(volume, n = 20, fill = NA, align = "right")]
-  dt_merged[, volume_ratio := volume / vol_sma_20]
-
-  dt_trades <- merge(dt_trades, dt_merged[, .(datetime, volume_ratio)],
-                     by = "datetime", all.x = TRUE, suffixes = c("", "_new"))
-  if ("volume_ratio_new" %in% names(dt_trades)) {
-    dt_trades[, volume_ratio := volume_ratio_new]
-    dt_trades[, volume_ratio_new := NULL]
-  }
-  cat("  volume_ratio: Volume / SMA(Volume, 20)\n")
-} else {
-  dt_trades[, volume_ratio := NA_real_]
-  cat("  WARNING: volume not found\n")
+  cat("  volume_ratio: Already available\n")
 }
 
-# --- 7.6: RSI (should exist in features) ---
-if ("rsi_14" %in% names(dt_trades)) {
-  cat("  rsi_14: Already available from features\n")
-} else {
-  dt_trades[, rsi_14 := NA_real_]
-  cat("  WARNING: rsi_14 not found\n")
+if ("obv" %in% names(dt_trades)) {
+  # OBV slope
+  dt_trades[, obv_slope := obv - shift(obv, 5)]
+  cat("  obv, obv_slope\n")
 }
 
-# --- 7.7: BB %B (should exist in features) ---
-if ("bb_pct_b_20" %in% names(dt_trades)) {
-  cat("  bb_pct_b_20: Already available from features\n")
-} else {
-  dt_trades[, bb_pct_b_20 := NA_real_]
-  cat("  WARNING: bb_pct_b_20 not found\n")
+if ("vpt" %in% names(dt_trades)) {
+  cat("  vpt: Already available\n")
 }
+
+# --- 7.6: Bollinger Band Position ---
+cat("\n--- Mean Reversion Features ---\n")
+
+if ("bb_pct_20" %in% names(dt_trades)) {
+  cat("  bb_pct_20: Already available\n")
+}
+
+if ("kc_position_20" %in% names(dt_trades)) {
+  cat("  kc_position_20: Already available\n")
+}
+
+# --- 7.7: Time/Session Features ---
+cat("\n--- Time/Session Features ---\n")
+
+dt_trades[, hour := hour(datetime)]
+dt_trades[, day_of_week := wday(datetime)]  # 1=Sunday, 7=Saturday
+dt_trades[, minute_of_day := hour * 60 + minute(datetime)]
+
+# Session flags (approximate)
+# Asian: 00:00-08:00 UTC
+# London: 08:00-16:00 UTC
+# New York: 13:00-21:00 UTC
+dt_trades[, session_asian := as.integer(hour >= 0 & hour < 8)]
+dt_trades[, session_london := as.integer(hour >= 8 & hour < 16)]
+dt_trades[, session_newyork := as.integer(hour >= 13 & hour < 21)]
+dt_trades[, session_overlap := as.integer(hour >= 13 & hour < 16)]  # London/NY overlap
+
+cat("  hour, day_of_week, minute_of_day\n")
+cat("  session_asian, session_london, session_newyork, session_overlap\n")
+
+# --- 7.8: Trade Direction Feature ---
+cat("\n--- Trade Context Features ---\n")
+
+dt_trades[, is_long := as.integer(signal == 1)]
+cat("  is_long: Trade direction indicator\n")
 
 # ===== STEP 8: TRAIN/TEST SPLIT ==============================================
 
@@ -386,194 +499,163 @@ cat(sprintf("\nTest set:\n"))
 cat(sprintf("  Mean PnL: %.6f\n", mean(dt_test$pnl)))
 cat(sprintf("  Win Rate: %.1f%%\n", 100 * mean(dt_test$pnl > 0)))
 
-# ===== STEP 9: DEFINE META-FEATURES ==========================================
+# ===== STEP 9: DEFINE CANDIDATE FEATURES =====================================
 
-cat("\n=== STEP 9: DEFINE META-FEATURES ===\n")
+cat("\n=== STEP 9: DEFINE CANDIDATE FEATURES ===\n")
 
-# Define feature groups for incremental testing
-feature_groups <- list(
-  baseline = c("clarity_gap", "atr_percentile", "adx_14"),
-  volatility = c("atr_trend", "atr_14"),
-  momentum = c("rsi_14", "bb_pct_b_20"),
-  volume = c("volume_ratio")
+# 30 curated meta-features
+candidate_features <- c(
+  # Signal quality (4)
+  "clarity_gap", "dominant_prob", "pred_prob_long", "pred_prob_short",
+
+  # Volatility (5)
+  "atr_14", "atr_14_pct", "bb_bandwidth_20", "vhf_28", "choppiness_14",
+
+  # Trend (6)
+  "adx_14", "di_diff_14", "ema_21_slope", "aroon_oscillator",
+  "ichimoku_position", "donchian_position_20",
+
+  # Momentum (7)
+  "rsi_14", "rsi_14_slope", "stoch_k", "stoch_k_d_diff",
+  "roc_10", "momentum_10", "dpo_20",
+
+  # Volume (2)
+  "volume_ratio", "obv_slope",
+
+  # Mean reversion (2)
+  "bb_pct_20", "kc_position_20",
+
+  # Time/Session (3)
+  "hour", "day_of_week", "session_overlap",
+
+  # Trade context (1)
+  "is_long"
 )
 
 # Filter to available features
-for (group_name in names(feature_groups)) {
-  available <- intersect(feature_groups[[group_name]], names(dt_train))
-  feature_groups[[group_name]] <- available
-  cat(sprintf("  %s: %s\n", group_name, paste(available, collapse = ", ")))
-}
+available_features <- intersect(candidate_features, names(dt_train))
+cat(sprintf("Candidate features: %d defined, %d available\n",
+            length(candidate_features), length(available_features)))
 
-# ===== STEP 10: TRAIN QUANTILE REGRESSION MODEL ==============================
+# Remove features with too many NAs
+na_counts <- sapply(available_features, function(f) sum(is.na(dt_train[[f]])))
+na_pct <- na_counts / nrow(dt_train)
+valid_features <- available_features[na_pct < 0.1]  # Max 10% NA
 
-cat("\n=== STEP 10: INCREMENTAL FEATURE SELECTION ===\n")
+cat(sprintf("Features with <10%% NA: %d\n", length(valid_features)))
 
-# Function to train and evaluate a feature set
-evaluate_features <- function(features, dt_train, dt_test, target_col = "pnl") {
+# ===== STEP 10: BORUTA FEATURE SELECTION =====================================
 
-  # Filter to available features with no NA
-  features <- intersect(features, names(dt_train))
-  if (length(features) == 0) {
-    return(list(spearman_train = NA, spearman_test = NA))
-  }
+cat("\n=== STEP 10: BORUTA FEATURE SELECTION ===\n")
 
-  # Prepare training data
-  train_complete <- dt_train[complete.cases(dt_train[, ..features])]
-  test_complete <- dt_test[complete.cases(dt_test[, ..features])]
+# Prepare data for Boruta
+train_for_boruta <- dt_train[complete.cases(dt_train[, ..valid_features])]
+cat(sprintf("Training samples for Boruta: %d\n", nrow(train_for_boruta)))
 
-  if (nrow(train_complete) < 100 || nrow(test_complete) < 50) {
-    return(list(
-      spearman_train = NA,
-      spearman_test = NA,
-      n_train = nrow(train_complete),
-      n_test = nrow(test_complete)
-    ))
-  }
+# Create formula
+X_boruta <- as.data.frame(train_for_boruta[, ..valid_features])
+y_boruta <- train_for_boruta$pnl
 
-  X_train <- as.matrix(train_complete[, ..features])
-  y_train <- train_complete[[target_col]]
+cat(sprintf("\nRunning Boruta with %d parallel workers...\n", getDoParWorkers()))
 
-  X_test <- as.matrix(test_complete[, ..features])
-  y_test <- test_complete[[target_col]]
-
-  # Split training for early stopping
-  set.seed(42)
-  val_idx <- sample(1:nrow(X_train), size = floor(0.2 * nrow(X_train)))
-  train_idx <- setdiff(1:nrow(X_train), val_idx)
-
-  dtrain <- xgb.DMatrix(data = X_train[train_idx, , drop = FALSE], label = y_train[train_idx])
-  dval <- xgb.DMatrix(data = X_train[val_idx, , drop = FALSE], label = y_train[val_idx])
-  dtest <- xgb.DMatrix(data = X_test, label = y_test)
-
-  # Train with early stopping
-  model <- xgb.train(
-    params = xgb_params,
-    data = dtrain,
-    nrounds = 500,
-    watchlist = list(train = dtrain, val = dval),
-    early_stopping_rounds = 50,
-    verbose = 0
-  )
-
-  # Get best iteration
-  best_iter <- model$best_iteration
-  if (is.null(best_iter) || length(best_iter) == 0) {
-    best_iter <- 100
-  }
-
-  # Retrain on full training data
-  dtrain_full <- xgb.DMatrix(data = X_train, label = y_train)
-  model_final <- xgb.train(
-    params = xgb_params,
-    data = dtrain_full,
-    nrounds = best_iter,
-    verbose = 0
-  )
-
-  # Predictions
-  pred_train <- predict(model_final, dtrain_full)
-  pred_test <- predict(model_final, dtest)
-
-  # Spearman correlations
-  spearman_train <- cor(pred_train, y_train, method = "spearman", use = "complete.obs")
-  spearman_test <- cor(pred_test, y_test, method = "spearman", use = "complete.obs")
-
-  return(list(
-    spearman_train = spearman_train,
-    spearman_test = spearman_test,
-    n_train = nrow(train_complete),
-    n_test = nrow(test_complete),
-    model = model_final,
-    best_iter = best_iter,
-    features = features,
-    pred_test = pred_test,
-    y_test = y_test,
-    test_data = test_complete
-  ))
-}
-
-# Incremental feature selection
-cat("\n--- Testing Feature Groups Incrementally ---\n")
-
-selected_features <- c()
-feature_selection_results <- data.table(
-  step = character(),
-  features_added = character(),
-  total_features = integer(),
-  spearman_train = numeric(),
-  spearman_test = numeric(),
-  improvement = numeric()
+set.seed(42)
+boruta_result <- Boruta(
+  x = X_boruta,
+  y = y_boruta,
+  maxRuns = 100,
+  doTrace = 1,
+  num.trees = 500,
+  num.threads = n_cores  # Parallel execution within ranger
 )
 
-best_spearman <- -Inf
-best_result <- NULL
+# Get selected features
+boruta_decision <- boruta_result$finalDecision
+confirmed_features <- names(boruta_decision[boruta_decision == "Confirmed"])
+tentative_features <- names(boruta_decision[boruta_decision == "Tentative"])
+rejected_features <- names(boruta_decision[boruta_decision == "Rejected"])
 
-for (group_name in names(feature_groups)) {
+cat(sprintf("\n--- Boruta Results ---\n"))
+cat(sprintf("Confirmed features (%d): %s\n", length(confirmed_features),
+            paste(confirmed_features, collapse = ", ")))
+cat(sprintf("Tentative features (%d): %s\n", length(tentative_features),
+            paste(tentative_features, collapse = ", ")))
+cat(sprintf("Rejected features (%d): %d\n", length(rejected_features), length(rejected_features)))
 
-  if (length(feature_groups[[group_name]]) == 0) {
-    cat(sprintf("\nSkipping %s (no available features)\n", group_name))
-    next
-  }
+# Use confirmed + tentative features
+selected_features <- c(confirmed_features, tentative_features)
 
-  # Test adding this group
-  test_features <- c(selected_features, feature_groups[[group_name]])
-
-  cat(sprintf("\nTesting: %s\n", group_name))
-  cat(sprintf("  Features: %s\n", paste(feature_groups[[group_name]], collapse = ", ")))
-
-  result <- evaluate_features(test_features, dt_train, dt_test)
-
-  if (is.na(result$spearman_test)) {
-    cat(sprintf("  -> SKIPPED (insufficient data)\n"))
-    next
-  }
-
-  improvement <- result$spearman_test - best_spearman
-
-  cat(sprintf("  Spearman (train): %.4f\n", result$spearman_train))
-  cat(sprintf("  Spearman (test):  %.4f\n", result$spearman_test))
-  cat(sprintf("  Improvement:      %+.4f\n", improvement))
-
-  # Record result
-  feature_selection_results <- rbind(feature_selection_results, data.table(
-    step = group_name,
-    features_added = paste(feature_groups[[group_name]], collapse = ", "),
-    total_features = length(test_features),
-    spearman_train = result$spearman_train,
-    spearman_test = result$spearman_test,
-    improvement = improvement
-  ))
-
-  # Keep group if it improves test correlation
-  if (result$spearman_test > best_spearman) {
-    cat(sprintf("  -> ACCEPTED (improves correlation)\n"))
-    selected_features <- test_features
-    best_spearman <- result$spearman_test
-    best_result <- result
-  } else {
-    cat(sprintf("  -> REJECTED (no improvement)\n"))
-  }
+if (length(selected_features) == 0) {
+  cat("WARNING: No features selected by Boruta. Using top 10 by importance.\n")
+  # Fallback: use importance from Boruta
+  imp <- attStats(boruta_result)
+  imp <- imp[order(-imp$meanImp), ]
+  selected_features <- rownames(imp)[1:min(10, nrow(imp))]
 }
-
-cat("\n--- Feature Selection Summary ---\n")
-print(feature_selection_results)
 
 cat(sprintf("\nFinal selected features (%d): %s\n",
             length(selected_features), paste(selected_features, collapse = ", ")))
-cat(sprintf("Final Spearman correlation (test): %.4f\n", best_spearman))
 
-# ===== STEP 11: FINAL MODEL AND ANALYSIS =====================================
+# Save Boruta results
+boruta_importance <- attStats(boruta_result)
+boruta_importance$feature <- rownames(boruta_importance)
+boruta_importance <- as.data.table(boruta_importance)
+setorder(boruta_importance, -meanImp)
 
-cat("\n=== STEP 11: FINAL MODEL TRAINING ===\n")
+boruta_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_boruta_importance_", LABEL_VERSION, ".csv"))
+fwrite(boruta_importance, boruta_file)
+cat(sprintf("Boruta importance saved: %s\n", boruta_file))
 
-if (is.null(best_result)) {
-  stop("ERROR: No valid model could be trained. Check your features.")
+# ===== STEP 11: TRAIN FINAL QUANTILE MODEL ===================================
+
+cat("\n=== STEP 11: TRAIN FINAL QUANTILE MODEL ===\n")
+
+# Prepare training data
+train_complete <- dt_train[complete.cases(dt_train[, ..selected_features])]
+test_complete <- dt_test[complete.cases(dt_test[, ..selected_features])]
+
+cat(sprintf("Training samples: %d\n", nrow(train_complete)))
+cat(sprintf("Test samples: %d\n", nrow(test_complete)))
+
+X_train <- as.matrix(train_complete[, ..selected_features])
+y_train <- train_complete$pnl
+
+X_test <- as.matrix(test_complete[, ..selected_features])
+y_test <- test_complete$pnl
+
+# Split for early stopping
+set.seed(42)
+val_idx <- sample(1:nrow(X_train), size = floor(0.2 * nrow(X_train)))
+train_idx <- setdiff(1:nrow(X_train), val_idx)
+
+dtrain <- xgb.DMatrix(data = X_train[train_idx, , drop = FALSE], label = y_train[train_idx])
+dval <- xgb.DMatrix(data = X_train[val_idx, , drop = FALSE], label = y_train[val_idx])
+
+# Train with early stopping
+cat("Training XGBoost with early stopping...\n")
+model <- xgb.train(
+  params = xgb_params,
+  data = dtrain,
+  nrounds = 1000,
+  evals = list(train = dtrain, val = dval),
+  early_stopping_rounds = 50,
+  verbose = 1,
+  print_every_n = 100
+)
+
+best_iter <- model$best_iteration
+if (is.null(best_iter) || length(best_iter) == 0) {
+  best_iter <- 200
 }
+cat(sprintf("\nBest iteration: %d\n", best_iter))
 
-# Use best result from feature selection
-final_features <- best_result$features
-final_model <- best_result$model
+# Retrain on full training data
+dtrain_full <- xgb.DMatrix(data = X_train, label = y_train)
+final_model <- xgb.train(
+  params = xgb_params,
+  data = dtrain_full,
+  nrounds = best_iter,
+  verbose = 0
+)
 
 # Save model
 model_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_quantile_model_", LABEL_VERSION, ".json"))
@@ -581,24 +663,41 @@ xgb.save(final_model, model_file)
 cat(sprintf("Model saved: %s\n", model_file))
 
 # Feature importance
-importance <- xgb.importance(feature_names = final_features, model = final_model)
-cat("\nFeature Importance:\n")
+importance <- xgb.importance(feature_names = selected_features, model = final_model)
+cat("\nXGBoost Feature Importance:\n")
 print(importance)
 
-# ===== STEP 12: BINNING ANALYSIS =============================================
+# ===== STEP 12: EVALUATE ON TEST SET =========================================
 
-cat("\n=== STEP 12: BINNING ANALYSIS ===\n")
+cat("\n=== STEP 12: EVALUATE ON TEST SET ===\n")
 
-# Get test predictions from best result
-test_data <- best_result$test_data
-test_data[, pred_q75 := best_result$pred_test]
-test_data[, actual_pnl := best_result$y_test]
+# Predictions
+dtest <- xgb.DMatrix(data = X_test, label = y_test)
+pred_train <- predict(final_model, dtrain_full)
+pred_test <- predict(final_model, dtest)
+
+# Spearman correlations
+spearman_train <- cor(pred_train, y_train, method = "spearman", use = "complete.obs")
+spearman_test <- cor(pred_test, y_test, method = "spearman", use = "complete.obs")
+
+cat(sprintf("\nSpearman Correlation:\n"))
+cat(sprintf("  Training: %.4f\n", spearman_train))
+cat(sprintf("  Test:     %.4f\n", spearman_test))
+cat(sprintf("  Diff:     %+.4f\n", spearman_test - spearman_train))
+
+# Add predictions to test data
+test_complete[, pred_q75 := pred_test]
+test_complete[, actual_pnl := y_test]
+
+# ===== STEP 13: BINNING ANALYSIS =============================================
+
+cat("\n=== STEP 13: BINNING ANALYSIS ===\n")
 
 # Create 5 quantile bins
-test_data[, pred_bin := ntile(pred_q75, 5)]
+test_complete[, pred_bin := ntile(pred_q75, 5)]
 
 # Analyze by bin
-bin_analysis <- test_data[, .(
+bin_analysis <- test_complete[, .(
   mean_pred = mean(pred_q75),
   mean_pnl = mean(actual_pnl),
   median_pnl = median(actual_pnl),
@@ -620,12 +719,12 @@ cat(sprintf("\nMonotonicity check (mean_pnl increases with bin): %s\n",
 spread <- bin_analysis[pred_bin == 5]$mean_pnl - bin_analysis[pred_bin == 1]$mean_pnl
 cat(sprintf("Spread (Bin 5 - Bin 1): %.6f\n", spread))
 
-# ===== STEP 13: THRESHOLD ANALYSIS ===========================================
+# ===== STEP 14: THRESHOLD ANALYSIS ===========================================
 
-cat("\n=== STEP 13: THRESHOLD ANALYSIS ===\n")
+cat("\n=== STEP 14: THRESHOLD ANALYSIS ===\n")
 
 # Use quantiles of predictions as thresholds
-pred_quantiles <- quantile(test_data$pred_q75, probs = c(0, 0.2, 0.4, 0.6, 0.8), na.rm = TRUE)
+pred_quantiles <- quantile(test_complete$pred_q75, probs = c(0, 0.2, 0.4, 0.6, 0.8), na.rm = TRUE)
 threshold_candidates <- as.numeric(pred_quantiles)
 
 threshold_results <- data.table(
@@ -634,8 +733,7 @@ threshold_results <- data.table(
   pct_trades = numeric(),
   mean_pnl = numeric(),
   total_pnl = numeric(),
-  win_rate = numeric(),
-  mean_pred = numeric()
+  win_rate = numeric()
 )
 
 cat("\n--- Threshold Comparison ---\n")
@@ -644,17 +742,16 @@ cat(sprintf("%-12s %10s %10s %12s %12s %10s\n",
 cat(paste(rep("-", 70), collapse = ""), "\n")
 
 for (thresh in threshold_candidates) {
-  filtered <- test_data[pred_q75 > thresh]
+  filtered <- test_complete[pred_q75 > thresh]
 
   if (nrow(filtered) > 0) {
     result <- data.table(
       threshold = thresh,
       n_trades = nrow(filtered),
-      pct_trades = 100 * nrow(filtered) / nrow(test_data),
+      pct_trades = 100 * nrow(filtered) / nrow(test_complete),
       mean_pnl = mean(filtered$actual_pnl),
       total_pnl = sum(filtered$actual_pnl),
-      win_rate = mean(filtered$actual_pnl > 0),
-      mean_pred = mean(filtered$pred_q75)
+      win_rate = mean(filtered$actual_pnl > 0)
     )
     threshold_results <- rbind(threshold_results, result)
 
@@ -664,26 +761,24 @@ for (thresh in threshold_candidates) {
   }
 }
 
-# Find optimal threshold (maximize mean_pnl while keeping >30% of trades)
+# Find optimal threshold
 optimal_thresh <- threshold_results[pct_trades >= 30][which.max(mean_pnl)]$threshold
 if (length(optimal_thresh) == 0) optimal_thresh <- min(threshold_candidates)
 
 cat(sprintf("\nRecommended threshold (max mean_pnl with >=30%% trades): %.6f\n", optimal_thresh))
 
-# ===== STEP 14: COMPARISON VS UNFILTERED =====================================
+# ===== STEP 15: COMPARISON VS UNFILTERED =====================================
 
-cat("\n=== STEP 14: COMPARISON VS UNFILTERED ===\n")
+cat("\n=== STEP 15: COMPARISON VS UNFILTERED ===\n")
 
-# Unfiltered stats
-unfiltered_stats <- test_data[, .(
+unfiltered_stats <- test_complete[, .(
   n_trades = .N,
   mean_pnl = mean(actual_pnl),
   total_pnl = sum(actual_pnl),
   win_rate = mean(actual_pnl > 0)
 )]
 
-# Filtered stats (using optimal threshold)
-filtered_data <- test_data[pred_q75 > optimal_thresh]
+filtered_data <- test_complete[pred_q75 > optimal_thresh]
 filtered_stats <- filtered_data[, .(
   n_trades = .N,
   mean_pnl = mean(actual_pnl),
@@ -691,8 +786,7 @@ filtered_stats <- filtered_data[, .(
   win_rate = mean(actual_pnl > 0)
 )]
 
-# Rejected trades
-rejected_data <- test_data[pred_q75 <= optimal_thresh]
+rejected_data <- test_complete[pred_q75 <= optimal_thresh]
 rejected_stats <- if (nrow(rejected_data) > 0) {
   rejected_data[, .(
     n_trades = .N,
@@ -716,46 +810,47 @@ cat(sprintf("Total PnL:          %-14.6f%-14.6f%.6f\n",
 cat(sprintf("Win Rate:           %-13.1f%%%-13.1f%%%.1f%%\n",
             unfiltered_stats$win_rate * 100, filtered_stats$win_rate * 100, rejected_stats$win_rate * 100))
 
-# ===== STEP 15: SAVE OUTPUTS =================================================
+# ===== STEP 16: SAVE OUTPUTS =================================================
 
-cat("\n=== STEP 15: SAVE OUTPUTS ===\n")
+cat("\n=== STEP 16: SAVE OUTPUTS ===\n")
 
-# --- 15.1: Save Feature Selection Results ---
-fs_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_feature_selection_", LABEL_VERSION, ".csv"))
-fwrite(feature_selection_results, fs_file)
-cat(sprintf("Feature selection results saved: %s\n", fs_file))
+# Feature Selection Results
+fs_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_selected_features_", LABEL_VERSION, ".csv"))
+fwrite(data.table(feature = selected_features), fs_file)
+cat(sprintf("Selected features saved: %s\n", fs_file))
 
-# --- 15.2: Save Binning Analysis ---
+# Binning Analysis
 bin_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_binning_analysis_", LABEL_VERSION, ".csv"))
 fwrite(bin_analysis, bin_file)
 cat(sprintf("Binning analysis saved: %s\n", bin_file))
 
-# --- 15.3: Save Threshold Results ---
+# Threshold Results
 thresh_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_threshold_analysis_", LABEL_VERSION, ".csv"))
 fwrite(threshold_results, thresh_file)
 cat(sprintf("Threshold analysis saved: %s\n", thresh_file))
 
-# --- 15.4: Save Filtered Test Data ---
+# Test Predictions
 output_cols <- c("datetime", "signal", "pnl", "pred_prob_long", "pred_prob_short",
-                 "pred_q75", "pred_bin", final_features)
-output_cols <- intersect(output_cols, names(test_data))
+                 "pred_q75", "pred_bin", selected_features)
+output_cols <- intersect(output_cols, names(test_complete))
 
 filtered_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_test_predictions_", LABEL_VERSION, ".csv"))
-fwrite(test_data[, ..output_cols], filtered_file)
+fwrite(test_complete[, ..output_cols], filtered_file)
 cat(sprintf("Test predictions saved: %s\n", filtered_file))
 
-# ===== STEP 16: VISUALIZATIONS ===============================================
+# ===== STEP 17: VISUALIZATIONS ===============================================
 
-cat("\n=== STEP 16: VISUALIZATIONS ===\n")
+cat("\n=== STEP 17: VISUALIZATIONS ===\n")
 
-# --- 16.1: Feature Importance Plot ---
+# Feature Importance Plot
 cat("Creating feature importance plot...\n")
 
-p_importance <- ggplot(importance, aes(x = reorder(Feature, Gain), y = Gain)) +
+p_importance <- ggplot(importance[1:min(20, nrow(importance))], aes(x = reorder(Feature, Gain), y = Gain)) +
   geom_bar(stat = "identity", fill = "steelblue") +
   coord_flip() +
   labs(
     title = sprintf("Quantile Regression Feature Importance - %s %s", EPIC, INTERVAL),
+    subtitle = sprintf("Top %d features (Boruta selected)", min(20, nrow(importance))),
     x = "Feature",
     y = "Gain"
   ) +
@@ -763,16 +858,16 @@ p_importance <- ggplot(importance, aes(x = reorder(Feature, Gain), y = Gain)) +
   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 
 importance_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_feature_importance_", LABEL_VERSION, ".png"))
-ggsave(importance_file, p_importance, width = 10, height = 6, dpi = 300)
+ggsave(importance_file, p_importance, width = 10, height = 8, dpi = 300)
 cat(sprintf("Feature importance plot saved: %s\n", importance_file))
 
-# --- 16.2: Binning Analysis Plot ---
+# Binning Plot
 cat("Creating binning analysis plot...\n")
 
 p_bins <- ggplot(bin_analysis, aes(x = factor(pred_bin))) +
   geom_bar(aes(y = mean_pnl, fill = "Mean PnL"), stat = "identity", alpha = 0.7) +
   geom_point(aes(y = win_rate / 100, color = "Win Rate"), size = 4) +
-  geom_line(aes(y = win_rate / 100, group = 1, color = "Win Rate"), size = 1) +
+  geom_line(aes(y = win_rate / 100, group = 1, color = "Win Rate"), linewidth = 1) +
   scale_y_continuous(
     name = "Mean PnL",
     sec.axis = sec_axis(~. * 100, name = "Win Rate (%)")
@@ -794,21 +889,22 @@ bins_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_binning_plo
 ggsave(bins_file, p_bins, width = 10, height = 6, dpi = 300)
 cat(sprintf("Binning plot saved: %s\n", bins_file))
 
-# --- 16.3: Prediction Distribution Plot ---
-cat("Creating prediction distribution plot...\n")
+# Boruta Importance Plot
+cat("Creating Boruta importance plot...\n")
 
-p_dist <- ggplot(test_data, aes(x = pred_q75)) +
-  geom_histogram(aes(fill = actual_pnl > 0), bins = 50, alpha = 0.7, position = "identity") +
-  geom_vline(xintercept = optimal_thresh, linetype = "dashed", color = "red", size = 1) +
-  annotate("text", x = optimal_thresh, y = Inf, label = sprintf("Threshold: %.4f", optimal_thresh),
-           vjust = 2, hjust = -0.1, color = "red") +
-  scale_fill_manual(values = c("TRUE" = "darkgreen", "FALSE" = "darkred"),
-                    labels = c("TRUE" = "Profitable", "FALSE" = "Not Profitable")) +
+boruta_top <- boruta_importance[1:min(30, nrow(boruta_importance))]
+boruta_top[, decision_color := fifelse(decision == "Confirmed", "Confirmed",
+                                        fifelse(decision == "Tentative", "Tentative", "Rejected"))]
+
+p_boruta <- ggplot(boruta_top, aes(x = reorder(feature, meanImp), y = meanImp, fill = decision_color)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  coord_flip() +
+  scale_fill_manual(values = c("Confirmed" = "darkgreen", "Tentative" = "orange", "Rejected" = "red")) +
   labs(
-    title = sprintf("Predicted Q75 Distribution - %s %s (Test %d)", EPIC, INTERVAL, TEST_YEAR),
-    x = "Predicted 75th Percentile PnL",
-    y = "Count",
-    fill = "Outcome"
+    title = sprintf("Boruta Feature Importance - %s %s", EPIC, INTERVAL),
+    x = "Feature",
+    y = "Mean Importance",
+    fill = "Decision"
   ) +
   theme_minimal() +
   theme(
@@ -816,13 +912,13 @@ p_dist <- ggplot(test_data, aes(x = pred_q75)) +
     legend.position = "bottom"
   )
 
-dist_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_prediction_dist_", LABEL_VERSION, ".png"))
-ggsave(dist_file, p_dist, width = 10, height = 6, dpi = 300)
-cat(sprintf("Prediction distribution saved: %s\n", dist_file))
+boruta_plot_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_boruta_plot_", LABEL_VERSION, ".png"))
+ggsave(boruta_plot_file, p_boruta, width = 10, height = 10, dpi = 300)
+cat(sprintf("Boruta plot saved: %s\n", boruta_plot_file))
 
-# ===== STEP 17: COMPREHENSIVE ANALYSIS REPORT ================================
+# ===== STEP 18: ANALYSIS REPORT ==============================================
 
-cat("\n=== STEP 17: SAVE ANALYSIS REPORT ===\n")
+cat("\n=== STEP 18: SAVE ANALYSIS REPORT ===\n")
 
 report_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_quantile_analysis_report_", LABEL_VERSION, ".txt"))
 
@@ -842,22 +938,15 @@ cat(sprintf("Timeframe: %s (15-minute bars)\n", INTERVAL))
 cat(sprintf("Test Year: %d (out-of-sample)\n", TEST_YEAR))
 cat(sprintf("Training Period: All data before %d\n\n", TEST_YEAR))
 
-cat("PROBLEM:\n")
-cat("Binary meta-labelling (predict profitable yes/no) achieved only AUC 0.56.\n")
-cat("This is barely better than random guessing and not useful for trading.\n\n")
-
-cat("NEW APPROACH:\n")
+cat("APPROACH:\n")
 cat("Quantile Regression predicting the 75th percentile of PnL distribution.\n")
-cat("Instead of asking 'will this trade be profitable?', we ask\n")
-cat("'what is the expected upside potential of this trade?'\n\n")
+cat("Feature selection via Boruta algorithm (Random Forest based).\n\n")
 
 cat("XGBoost Parameters:\n")
 cat(sprintf("  objective: reg:quantileerror\n"))
-cat(sprintf("  quantile_alpha: %.2f (predicting Q75)\n", QUANTILE_ALPHA))
+cat(sprintf("  quantile_alpha: %.2f\n", QUANTILE_ALPHA))
 cat(sprintf("  max_depth: %d\n", xgb_params$max_depth))
 cat(sprintf("  eta: %.3f\n", xgb_params$eta))
-cat(sprintf("  subsample: %.1f\n", xgb_params$subsample))
-cat(sprintf("  colsample_bytree: %.1f\n", xgb_params$colsample_bytree))
 cat(sprintf("  min_child_weight: %d\n\n", xgb_params$min_child_weight))
 
 cat("================================================================================\n")
@@ -867,75 +956,50 @@ cat("===========================================================================
 cat(sprintf("Training trades: %s (before %d)\n", format(nrow(dt_train), big.mark = ","), TEST_YEAR))
 cat(sprintf("Test trades: %s (%d)\n\n", format(nrow(dt_test), big.mark = ","), TEST_YEAR))
 
-cat("Training set performance (primary model signals):\n")
+cat("Training set performance:\n")
 cat(sprintf("  Mean PnL: %.6f\n", mean(dt_train$pnl)))
 cat(sprintf("  Win Rate: %.1f%%\n\n", 100 * mean(dt_train$pnl > 0)))
 
-cat("Test set performance (primary model signals):\n")
+cat("Test set performance:\n")
 cat(sprintf("  Mean PnL: %.6f\n", mean(dt_test$pnl)))
 cat(sprintf("  Win Rate: %.1f%%\n\n", 100 * mean(dt_test$pnl > 0)))
 
 cat("================================================================================\n")
-cat("3. FEATURES USED\n")
+cat("3. BORUTA FEATURE SELECTION\n")
 cat("================================================================================\n\n")
 
-cat("Feature selection was incremental - groups only kept if they improved correlation.\n\n")
+cat(sprintf("Candidate features tested: %d\n", length(valid_features)))
+cat(sprintf("Confirmed features: %d\n", length(confirmed_features)))
+cat(sprintf("Tentative features: %d\n", length(tentative_features)))
+cat(sprintf("Rejected features: %d\n\n", length(rejected_features)))
 
-feature_descriptions <- data.table(
-  Feature = c("clarity_gap", "atr_percentile", "adx_14", "atr_trend", "atr_14",
-              "rsi_14", "bb_pct_b_20", "volume_ratio"),
-  Description = c(
-    "abs(pred_prob_long - pred_prob_short): Signal clarity",
-    "ATR_14 percentile within rolling 60-bar window",
-    "Average Directional Index (trend strength)",
-    "ATR_5 / ATR_20: Volatility expansion/contraction",
-    "14-period Average True Range",
-    "14-period Relative Strength Index",
-    "Bollinger Band %B (position within bands)",
-    "Volume / SMA(Volume, 20)"
-  )
-)
-
-cat("Feature Definitions:\n")
-cat(paste(rep("-", 80), collapse = ""), "\n")
-for (feat in final_features) {
-  desc_row <- feature_descriptions[Feature == feat]
-  if (nrow(desc_row) > 0) {
-    cat(sprintf("%-20s %s\n", feat, desc_row$Description))
-  } else {
-    cat(sprintf("%-20s (no description)\n", feat))
-  }
+cat("Selected features:\n")
+for (f in selected_features) {
+  cat(sprintf("  - %s\n", f))
 }
 
-cat(sprintf("\n\nFinal selected features (%d): %s\n\n", length(final_features), paste(final_features, collapse = ", ")))
-
-cat("================================================================================\n")
-cat("4. FEATURE SELECTION RESULTS\n")
-cat("================================================================================\n\n")
-
-print(feature_selection_results)
+cat("\n\nBoruta Importance (Top 20):\n")
+print(boruta_importance[1:min(20, nrow(boruta_importance)), .(feature, meanImp, decision)])
 
 cat("\n")
 
 cat("================================================================================\n")
-cat("5. MODEL PERFORMANCE\n")
+cat("4. MODEL PERFORMANCE\n")
 cat("================================================================================\n\n")
 
-cat("Primary Metric: Spearman Correlation\n")
-cat("(Measures monotonic relationship between predictions and actual PnL)\n\n")
-
-cat(sprintf("Training Spearman:  %.4f\n", best_result$spearman_train))
-cat(sprintf("Test Spearman:      %.4f\n", best_result$spearman_test))
-cat(sprintf("Difference:         %+.4f\n\n", best_result$spearman_test - best_result$spearman_train))
+cat("Spearman Correlation:\n")
+cat(sprintf("  Training: %.4f\n", spearman_train))
+cat(sprintf("  Test:     %.4f\n", spearman_test))
+cat(sprintf("  Diff:     %+.4f\n\n", spearman_test - spearman_train))
 
 cat("Interpretation:\n")
-cat("  Spearman = 0.00: No relationship (model is useless)\n")
-cat("  Spearman = 0.10: Weak positive relationship\n")
-cat("  Spearman = 0.20: Moderate relationship (good for finance)\n")
-cat("  Spearman = 0.30+: Strong relationship (rare in finance)\n\n")
+cat("  0.00: No relationship\n")
+cat("  0.10: Weak positive\n")
+cat("  0.20: Moderate (good for finance)\n")
+cat("  0.30+: Strong (rare)\n\n")
 
 cat("================================================================================\n")
-cat("6. FEATURE IMPORTANCE\n")
+cat("5. XGBOOST FEATURE IMPORTANCE\n")
 cat("================================================================================\n\n")
 
 print(importance)
@@ -943,29 +1007,23 @@ print(importance)
 cat("\n")
 
 cat("================================================================================\n")
-cat("7. BINNING ANALYSIS (KEY VALIDATION)\n")
+cat("6. BINNING ANALYSIS\n")
 cat("================================================================================\n\n")
 
-cat("Trades split into 5 quintile bins based on predicted Q75.\n")
-cat("If model works, higher bins should have better outcomes.\n\n")
-
 print(bin_analysis[, .(
-  pred_bin,
-  n,
+  pred_bin, n,
   mean_pred = round(mean_pred, 6),
   mean_pnl = round(mean_pnl, 6),
-  median_pnl = round(median_pnl, 6),
-  q75_pnl = round(q75_pnl, 6),
   win_rate = round(win_rate, 4)
 )])
 
-cat(sprintf("\n\nMonotonicity Check: %s\n", ifelse(monotonic_check, "PASSED", "FAILED")))
-cat(sprintf("Spread (Bin 5 - Bin 1 mean_pnl): %.6f\n", spread))
+cat(sprintf("\n\nMonotonicity: %s\n", ifelse(monotonic_check, "PASSED", "FAILED")))
+cat(sprintf("Spread (Bin 5 - Bin 1): %.6f\n", spread))
 
 cat("\n")
 
 cat("================================================================================\n")
-cat("8. THRESHOLD ANALYSIS\n")
+cat("7. THRESHOLD ANALYSIS\n")
 cat("================================================================================\n\n")
 
 print(threshold_results[, .(
@@ -973,7 +1031,6 @@ print(threshold_results[, .(
   n_trades,
   pct_trades = round(pct_trades, 1),
   mean_pnl = round(mean_pnl, 6),
-  total_pnl = round(total_pnl, 6),
   win_rate = round(win_rate, 4)
 )])
 
@@ -982,13 +1039,12 @@ cat(sprintf("\n\nRecommended threshold: %.6f\n", optimal_thresh))
 cat("\n")
 
 cat("================================================================================\n")
-cat("9. FINAL COMPARISON: FILTERED VS UNFILTERED\n")
+cat("8. FILTERED VS UNFILTERED\n")
 cat("================================================================================\n\n")
 
 cat(sprintf("                    UNFILTERED    FILTERED      REJECTED\n"))
-cat(sprintf("                    (All)         (pred>%.4f) (pred<=%.4f)\n", optimal_thresh, optimal_thresh))
 cat(paste(rep("-", 65), collapse = ""), "\n")
-cat(sprintf("Number of Trades:   %-14d%-14d%d\n",
+cat(sprintf("Trades:             %-14d%-14d%d\n",
             unfiltered_stats$n_trades, filtered_stats$n_trades, rejected_stats$n_trades))
 cat(sprintf("Mean PnL:           %-14.6f%-14.6f%.6f\n",
             unfiltered_stats$mean_pnl, filtered_stats$mean_pnl, rejected_stats$mean_pnl))
@@ -1000,33 +1056,16 @@ cat(sprintf("Win Rate:           %-13.1f%%%-13.1f%%%.1f%%\n",
 cat("\n")
 
 cat("================================================================================\n")
-cat("10. QUESTIONS FOR ANALYSIS\n")
+cat("9. QUESTIONS FOR ANALYSIS\n")
 cat("================================================================================\n\n")
 
-cat("Please analyze:\n\n")
-
-cat(sprintf("1. MODEL QUALITY: Is Spearman correlation of %.4f meaningful?\n", best_spearman))
-cat("   Is this correlation strong enough to be useful for trading?\n\n")
-
-cat("2. MONOTONICITY: Does the binning analysis show the expected pattern?\n")
-cat("   Are higher prediction bins consistently associated with better outcomes?\n\n")
-
-cat(sprintf("3. OVERFITTING: Train Spearman = %.4f, Test Spearman = %.4f\n",
-            best_result$spearman_train, best_result$spearman_test))
-cat("   Is there evidence of overfitting?\n\n")
-
-cat("4. FEATURE IMPORTANCE: Do the important features make economic sense?\n\n")
-
-cat(sprintf("5. THRESHOLD CHOICE: Is %.6f the right threshold?\n", optimal_thresh))
-cat("   Should we be more or less aggressive in filtering?\n\n")
-
-cat("6. PRACTICAL VALUE: Does the filtered strategy meaningfully improve\n")
-cat("   over the unfiltered strategy?\n\n")
-
-cat("7. RECOMMENDATIONS:\n")
-cat("   - Should we use this quantile filter in production?\n")
-cat("   - What threshold would you recommend?\n")
-cat("   - Any concerns about the methodology?\n\n")
+cat(sprintf("1. Is Spearman correlation of %.4f meaningful for trading?\n\n", spearman_test))
+cat("2. Does the binning show proper monotonicity?\n\n")
+cat(sprintf("3. Overfitting check: Train=%.4f vs Test=%.4f\n\n", spearman_train, spearman_test))
+cat("4. Do the selected features make economic sense?\n\n")
+cat(sprintf("5. Is threshold %.6f optimal?\n\n", optimal_thresh))
+cat("6. Does filtering add practical value?\n\n")
+cat("7. Recommendations for production use?\n\n")
 
 cat("================================================================================\n")
 cat("END OF REPORT\n")
@@ -1036,52 +1075,15 @@ sink()
 
 cat(sprintf("Analysis report saved: %s\n", report_file))
 
-# ===== STEP 18: CREATE ZIP ARCHIVE ===========================================
-
-cat("\n=== STEP 18: CREATE ZIP ARCHIVE ===\n")
-
-zip_file <- file.path(qr_output_path, paste0(EPIC, "_", INTERVAL, "_quantile_regression_package_", LABEL_VERSION, ".zip"))
-
-files_to_zip <- c(
-  "r/04_quantile_regression.R",
-  model_file,
-  fs_file,
-  bin_file,
-  thresh_file,
-  filtered_file,
-  importance_file,
-  bins_file,
-  dist_file,
-  report_file
-)
-
-files_to_zip <- files_to_zip[file.exists(files_to_zip)]
-
-cat(sprintf("Creating ZIP archive with %d files...\n", length(files_to_zip)))
-
-if (length(files_to_zip) > 0) {
-  if (file.exists(zip_file)) {
-    file.remove(zip_file)
-  }
-
-  zip(zip_file, files = files_to_zip, flags = "-j")
-
-  if (file.exists(zip_file)) {
-    zip_size <- file.size(zip_file) / 1024
-    cat(sprintf("ZIP archive created: %s (%.1f KB)\n", zip_file, zip_size))
-    cat("\nFiles included:\n")
-    for (f in files_to_zip) {
-      cat(sprintf("  - %s\n", basename(f)))
-    }
-  }
-}
-
 # ===== DONE ==================================================================
+
+# Cleanup parallel cluster
+stopCluster(cl)
 
 cat("\n=== QUANTILE REGRESSION COMPLETE ===\n")
 cat(sprintf("\nKey Results:\n"))
-cat(sprintf("  Spearman Correlation (test): %.4f\n", best_spearman))
+cat(sprintf("  Boruta selected features: %d\n", length(selected_features)))
+cat(sprintf("  Spearman Correlation (test): %.4f\n", spearman_test))
 cat(sprintf("  Recommended Threshold: %.6f\n", optimal_thresh))
 cat(sprintf("  Monotonicity Check: %s\n", ifelse(monotonic_check, "PASSED", "FAILED")))
 cat(sprintf("\nOutputs saved to: %s\n", qr_output_path))
-cat(sprintf("ZIP archive: %s\n", zip_file))
