@@ -1,0 +1,5 @@
+ctrader-open-api>=0.9.2
+twisted>=22.0
+pyOpenSSL
+service_identity
+requests

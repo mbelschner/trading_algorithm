@@ -1,3 +1,8 @@
+# cTrader API – sensitive files
+ctrader_setup/config.py
+ctrader_setup/tokens.json
+ctrader_setup/.venv/
+
 # R specific files
 .Rhistory
 .RData
@@ -49,3 +54,8 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Python image generation
+python/image_generation_flux.py
+python/pics/
+pics/

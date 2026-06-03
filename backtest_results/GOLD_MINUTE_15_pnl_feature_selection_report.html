@@ -1,0 +1,285 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <title>PnL-Based Feature Selection Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+    .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+    h2 { color: #34495e; margin-top: 30px; }
+    h3 { color: #7f8c8d; }
+    table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+    th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+    th { background-color: #3498db; color: white; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    tr:hover { background-color: #f5f5f5; }
+    .metric-box { display: inline-block; background: #ecf0f1; padding: 15px 25px; margin: 10px; border-radius: 5px; text-align: center; }
+    .metric-value { font-size: 24px; font-weight: bold; color: #2c3e50; }
+    .metric-label { font-size: 12px; color: #7f8c8d; }
+    .positive { color: #27ae60; }
+    .negative { color: #e74c3c; }
+    .section { margin: 30px 0; padding: 20px; background: #fafafa; border-radius: 5px; }
+    .feature-list { column-count: 3; column-gap: 20px; }
+    .feature-item { break-inside: avoid; padding: 5px 0; }
+    .timestamp { color: #95a5a6; font-size: 12px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>PnL-Based Feature Selection Report</h1>
+  <p class="timestamp">Generated: 2026-01-26 15:47:17</p>
+
+  <h2>Executive Summary</h2>
+  <div class="section">
+    <div class="metric-box">
+      <div class="metric-value">10</div>
+      <div class="metric-label">Feature Groups Evaluated</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value">15</div>
+      <div class="metric-label">Walk-Forward Windows</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value">50</div>
+      <div class="metric-label">Selected Features (Long)</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value">50</div>
+      <div class="metric-label">Selected Features (Short)</div>
+    </div>
+  </div>
+
+  <h2>Final Test Results</h2>
+  <div class="section">
+    <h3>Long Model</h3>
+    <div class="metric-box">
+      <div class="metric-value negative">-34.20</div>
+      <div class="metric-label">Sharpe Ratio</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value">0.15</div>
+      <div class="metric-label">Profit Factor</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value negative">-2.3%</div>
+      <div class="metric-label">Total Return</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value">16.7%</div>
+      <div class="metric-label">Win Rate</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value">12</div>
+      <div class="metric-label">Trades</div>
+    </div>
+
+    <h3>Short Model</h3>
+    <div class="metric-box">
+      <div class="metric-value NA">NA</div>
+      <div class="metric-label">Sharpe Ratio</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value">NA</div>
+      <div class="metric-label">Profit Factor</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value NA">NA%</div>
+      <div class="metric-label">Total Return</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value">NA%</div>
+      <div class="metric-label">Win Rate</div>
+    </div>
+    <div class="metric-box">
+      <div class="metric-value">0</div>
+      <div class="metric-label">Trades</div>
+    </div>
+  </div>
+
+  <h2>Baseline Comparison</h2>
+  <div class="section">
+    <p>Random prediction baseline (n=100 simulations):</p>
+    <table>
+      <tr>
+        <th>Direction</th>
+        <th>Baseline Mean Sharpe</th>
+        <th>Model Sharpe</th>
+        <th>Improvement</th>
+      </tr>
+      <tr>
+        <td>Long</td>
+        <td>-2.98</td>
+        <td>-34.20</td>
+        <td class="negative">-31.22</td>
+      </tr>
+      <tr>
+        <td>Short</td>
+        <td>-6.33</td>
+        <td>NA</td>
+        <td class="NA">NA</td>
+      </tr>
+    </table>
+  </div>
+
+  <h2>Top Feature Groups</h2>
+  <div class="section">
+    <h3>Long Direction - Top 10</h3>
+    <table>
+      <tr><th>Rank</th><th>Group</th><th>Mean Sharpe</th><th>Consistency</th><th>Profit Factor</th><th>Total Trades</th></tr>
+      <tr><td>1</td><td>LONG_TOP_01_10</td><td>-8.53</td><td>16.7%</td><td>0.64</td><td>328</td></tr>
+<tr><td>2</td><td>LONG_TOP_11_20</td><td>-10.39</td><td>0.0%</td><td>0.48</td><td>989</td></tr>
+<tr><td>3</td><td>LONG_TOP_21_30</td><td>-3.08</td><td>25.0%</td><td>Inf</td><td>474</td></tr>
+<tr><td>4</td><td>LONG_RANDOM_01</td><td>-50.18</td><td>20.0%</td><td>0.86</td><td>228</td></tr>
+<tr><td>5</td><td>LONG_RANDOM_02</td><td>-5.32</td><td>0.0%</td><td>0.67</td><td>464</td></tr>
+<tr><td>6</td><td>LONG_RANDOM_03</td><td>-6.94</td><td>0.0%</td><td>0.64</td><td>363</td></tr>
+<tr><td>7</td><td>LONG_RANDOM_04</td><td>-9.98</td><td>0.0%</td><td>0.67</td><td>175</td></tr>
+<tr><td>8</td><td>LONG_RANDOM_05</td><td>-8.20</td><td>10.0%</td><td>0.60</td><td>402</td></tr>
+<tr><td>9</td><td>LONG_RANDOM_06</td><td>21.49</td><td>14.3%</td><td>Inf</td><td>380</td></tr>
+<tr><td>10</td><td>LONG_RANDOM_07</td><td>-5.16</td><td>33.3%</td><td>0.79</td><td>484</td></tr>
+    </table>
+
+    <h3>Short Direction - Top 10</h3>
+    <table>
+      <tr><th>Rank</th><th>Group</th><th>Mean Sharpe</th><th>Consistency</th><th>Profit Factor</th><th>Total Trades</th></tr>
+      <tr><td>1</td><td>SHORT_TOP_01_10</td><td>-6.73</td><td>11.1%</td><td>0.63</td><td>999</td></tr>
+<tr><td>2</td><td>SHORT_TOP_11_20</td><td>-33.38</td><td>0.0%</td><td>0.47</td><td>787</td></tr>
+<tr><td>3</td><td>SHORT_TOP_21_30</td><td>-9.17</td><td>0.0%</td><td>0.51</td><td>472</td></tr>
+<tr><td>4</td><td>SHORT_RANDOM_01</td><td>-10.05</td><td>0.0%</td><td>0.53</td><td>395</td></tr>
+<tr><td>5</td><td>SHORT_RANDOM_02</td><td>-5.23</td><td>22.2%</td><td>0.74</td><td>545</td></tr>
+<tr><td>6</td><td>SHORT_RANDOM_03</td><td>-7.76</td><td>11.1%</td><td>0.57</td><td>798</td></tr>
+<tr><td>7</td><td>SHORT_RANDOM_04</td><td>-7.67</td><td>20.0%</td><td>0.58</td><td>124</td></tr>
+<tr><td>8</td><td>SHORT_RANDOM_05</td><td>-7.62</td><td>0.0%</td><td>0.57</td><td>856</td></tr>
+<tr><td>9</td><td>SHORT_RANDOM_06</td><td>-149.32</td><td>10.0%</td><td>0.46</td><td>493</td></tr>
+<tr><td>10</td><td>SHORT_RANDOM_07</td><td>-2.51</td><td>20.0%</td><td>Inf</td><td>258</td></tr>
+    </table>
+  </div>
+
+  <h2>Selected Features</h2>
+  <div class="section">
+    <h3>Long Model Features (50)</h3>
+    <div class="feature-list">
+      <div class="feature-item">volume_roll_sd_20</div>
+<div class="feature-item">volume_ratio_roll_mean_50</div>
+<div class="feature-item">VIX_rsi_14_lag20</div>
+<div class="feature-item">volume_ratio_roll_mean_20</div>
+<div class="feature-item">DXY_volume_roc_10_lag20</div>
+<div class="feature-item">volume_roll_mean_50</div>
+<div class="feature-item">close_roll_sd_50</div>
+<div class="feature-item">body_pct</div>
+<div class="feature-item">DXY_volume_sma_20_lag20</div>
+<div class="feature-item">SILVER_volume_lag8</div>
+<div class="feature-item">close_roll_sd_10</div>
+<div class="feature-item">volume_ma_20</div>
+<div class="feature-item">DXY_volume_roc_5_lag20</div>
+<div class="feature-item">SILVER_volume_roc_5_lag20</div>
+<div class="feature-item">hour_range</div>
+<div class="feature-item">SILVER_volume_sma_20_lag20</div>
+<div class="feature-item">DXY_volume_ratio</div>
+<div class="feature-item">volume_ratio_zscore_50</div>
+<div class="feature-item">SILVER_volume_ratio_lag4</div>
+<div class="feature-item">SILVER_volume_ratio</div>
+<div class="feature-item">VIX_volume_roc_10_lag20</div>
+<div class="feature-item">volume_ratio_roll_mean_10</div>
+<div class="feature-item">volume_ratio_lag10</div>
+<div class="feature-item">day_of_week</div>
+<div class="feature-item">DXY_di_plus_14_lag8</div>
+<div class="feature-item">VIX_volume_roc_5_lag20</div>
+<div class="feature-item">volume_ratio_roll_sd_50</div>
+<div class="feature-item">SILVER_volume_roc_10_lag8</div>
+<div class="feature-item">DXY_macd_diff_lag8</div>
+<div class="feature-item">stoch_k_lag5</div>
+<div class="feature-item">DXY_adx_14_lag1</div>
+<div class="feature-item">momentum_20_d2</div>
+<div class="feature-item">ema_21_slope_lag10</div>
+<div class="feature-item">adx_14_lag2</div>
+<div class="feature-item">DXY_volume_roc_5</div>
+<div class="feature-item">VIX_volume_roc_10_lag4</div>
+<div class="feature-item">rsi_28_lag10</div>
+<div class="feature-item">aroon_oscillator_lag1</div>
+<div class="feature-item">SILVER_macd_diff_lag1</div>
+<div class="feature-item">DXY_volume_sma_20_lag8</div>
+<div class="feature-item">rsi_14_roll_mean_50</div>
+<div class="feature-item">DXY_close_lag20</div>
+<div class="feature-item">aroon_up</div>
+<div class="feature-item">obv</div>
+<div class="feature-item">VIX_di_plus_14_lag4</div>
+<div class="feature-item">SILVER_di_plus_14_lag20</div>
+<div class="feature-item">adx_14_d2</div>
+<div class="feature-item">VIX_macd_diff_lag4</div>
+<div class="feature-item">bb_bandwidth_20_roll_mean_50</div>
+<div class="feature-item">stoch_d</div>
+    </div>
+
+    <h3>Short Model Features (50)</h3>
+    <div class="feature-list">
+      <div class="feature-item">volume_roll_sd_50</div>
+<div class="feature-item">hl_range</div>
+<div class="feature-item">volume_roll_sd_20</div>
+<div class="feature-item">volume_ratio_zscore_50</div>
+<div class="feature-item">hour_range</div>
+<div class="feature-item">SILVER_macd_diff_lag20</div>
+<div class="feature-item">adx_14_d1</div>
+<div class="feature-item">bb_bandwidth_20_roll_sd_20</div>
+<div class="feature-item">DXY_volume_sma_20_lag20</div>
+<div class="feature-item">volume_roll_sd_10</div>
+<div class="feature-item">VIX_adx_14</div>
+<div class="feature-item">DXY_vpt_lag20</div>
+<div class="feature-item">rsi_14_roll_sd_10</div>
+<div class="feature-item">obv</div>
+<div class="feature-item">DXY_volume</div>
+<div class="feature-item">DXY_volume_ratio_lag20</div>
+<div class="feature-item">rsi_14_roll_sd_50</div>
+<div class="feature-item">SILVER_close_lag20</div>
+<div class="feature-item">SILVER_volume_roc_5_lag8</div>
+<div class="feature-item">SILVER_volume_roc_10_lag20</div>
+<div class="feature-item">volume_zscore_50</div>
+<div class="feature-item">SILVER_volume_roc_5</div>
+<div class="feature-item">DXY_macd_diff_lag20</div>
+<div class="feature-item">volume_roll_mean_10</div>
+<div class="feature-item">bb_bandwidth_20_roll_mean_10</div>
+<div class="feature-item">donchian_position_20</div>
+<div class="feature-item">ema_9_slope</div>
+<div class="feature-item">volume_ratio_roll_mean_20</div>
+<div class="feature-item">DXY_adx_14_lag1</div>
+<div class="feature-item">DXY_volume_ratio</div>
+<div class="feature-item">bb_bandwidth_20_roll_sd_50</div>
+<div class="feature-item">volume_ratio_lag3</div>
+<div class="feature-item">SILVER_volume_roc_10_lag4</div>
+<div class="feature-item">vhf_28</div>
+<div class="feature-item">volume_ratio_roll_mean_50</div>
+<div class="feature-item">VIX_macd_signal_lag4</div>
+<div class="feature-item">SILVER_volume_ratio</div>
+<div class="feature-item">DXY_di_minus_14_lag4</div>
+<div class="feature-item">SILVER_volume_roc_10</div>
+<div class="feature-item">VIX_volume_ratio</div>
+<div class="feature-item">SILVER_volume_sma_20_lag1</div>
+<div class="feature-item">SILVER_adx_14_lag20</div>
+<div class="feature-item">body_pct</div>
+<div class="feature-item">SILVER_macd_diff_lag1</div>
+<div class="feature-item">VIX_macd_diff_lag4</div>
+<div class="feature-item">DXY_volume_roc_5_lag4</div>
+<div class="feature-item">VIX_di_plus_14_lag8</div>
+<div class="feature-item">roc_5_d2</div>
+<div class="feature-item">close_roll_sd_10</div>
+<div class="feature-item">rsi_14_roll_sd_20</div>
+    </div>
+  </div>
+
+  <h2>Configuration</h2>
+  <div class="section">
+    <table>
+      <tr><th>Parameter</th><th>Value</th></tr>
+      <tr><td>Entry Threshold</td><td>0.55</td></tr>
+      <tr><td>ATR Multiplier (TP/SL)</td><td>2.5 / 2.0</td></tr>
+      <tr><td>Max Bars Held</td><td>16</td></tr>
+      <tr><td>Slippage</td><td>0.0200%</td></tr>
+      <tr><td>Commission</td><td>0.0200%</td></tr>
+      <tr><td>XGBoost Max Depth (Feature Selection)</td><td>4</td></tr>
+      <tr><td>XGBoost Max Depth (Final Model)</td><td>4</td></tr>
+    </table>
+  </div>
+
+</div>
+</body>
+</html>

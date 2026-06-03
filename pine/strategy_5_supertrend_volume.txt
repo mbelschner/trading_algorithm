@@ -1,0 +1,172 @@
+// ============================================================================
+// Strategy 5: Supertrend + Volume Regime
+// Timeframe: 15min | Instrument: Gold (XAUUSD)
+// Logik: Supertrend-Flip als Entry-Signal.
+//        Volume-Regime (rollende Percentile) als Qualitätsfilter.
+//        ADX als Trendstärke-Filter — nur traden wenn Markt trending.
+//        Session-Filter + ATR Trailing Stop mit Take Profit.
+// ============================================================================
+
+//@version=6
+strategy("Supertrend + Volume Regime [Gold 15m]",
+     overlay        = true,
+     initial_capital = 100000,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 5,
+     commission_type  = strategy.commission.percent,
+     commission_value = 0.005,
+     slippage        = 1,
+     calc_on_every_tick = false)
+
+// === INPUTS ===
+// Supertrend
+stFactor    = input.float(3.0, "Supertrend Faktor", step=0.1)
+stLength    = input.int(10,    "Supertrend ATR Länge", minval=5)
+
+// ADX Trendstärke-Filter
+useAdxFilter = input.bool(true, "ADX Filter aktivieren")
+adxLength    = input.int(14,   "ADX Länge")
+adxThreshold = input.float(20, "ADX Minimum für Entry", step=1)
+
+// Volume Regime
+volLookback    = input.int(50,   "Volume Regime Lookback")
+volHighPctile  = input.float(70, "Volume High Percentile", step=5)
+
+// Session-Filter (CET)
+tradeStart     = input.int(0,  "Trade Start (Stunde CET)")
+tradeEnd       = input.int(19, "Trade Ende (Stunde CET)")
+avoidDeadZone  = input.bool(true, "10:00-14:00 meiden")
+
+// Trailing Stop + Take Profit
+atrLength      = input.int(14,  "ATR Länge für Stops")
+trailAtrMult   = input.float(1.5, "Trailing Stop ATR-Mult", step=0.1)
+tpAtrMult      = input.float(3.0, "Take Profit ATR-Mult", step=0.1)
+useTakeProfit   = input.bool(true, "Take Profit aktivieren")
+
+// Max Trades pro Tag
+maxTradesPerDay = input.int(2, "Max Trades pro Tag", minval=1, maxval=5)
+
+// === BERECHNUNGEN ===
+tz = "Europe/Vienna"
+currentHour = hour(time, tz)
+
+inDeadZone = currentHour >= 10 and currentHour < 14
+sessionOk  = currentHour >= tradeStart and currentHour < tradeEnd
+if avoidDeadZone and inDeadZone
+    sessionOk := false
+
+// Supertrend
+[stLine, stDir] = ta.supertrend(stFactor, stLength)
+
+// Supertrend Flip Detection
+stFlipBull = stDir == -1 and stDir[1] == 1   // bearish → bullish
+stFlipBear = stDir == 1  and stDir[1] == -1   // bullish → bearish
+
+// ADX
+[diPlus, diMinus, adxValue] = ta.dmi(adxLength, adxLength)
+adxOk = not useAdxFilter or adxValue > adxThreshold
+
+// Volume Regime: ist aktuelles Volumen über dem X-ten Percentil?
+// Einfache Annäherung via Ranking
+volRank = ta.percentrank(volume, volLookback)
+highVolRegime = volRank >= volHighPctile
+
+// ATR
+atr = ta.atr(atrLength)
+
+// === ENTRY SIGNALE ===
+longSignal  = stFlipBull and highVolRegime and adxOk and sessionOk
+shortSignal = stFlipBear and highVolRegime and adxOk and sessionOk
+
+// === TRADE COUNTER ===
+var int dailyTrades = 0
+newDay = ta.change(dayofweek(time, tz)) != 0
+if newDay
+    dailyTrades := 0
+
+canTrade = dailyTrades < maxTradesPerDay
+
+// === ENTRY + EXIT MANAGEMENT ===
+var float trailStop  = na
+var float entryPrice = na
+noPosition = strategy.position_size == 0
+
+if longSignal and canTrade and noPosition
+    strategy.entry("Long", strategy.long)
+    entryPrice := close
+    trailStop  := close - atr * trailAtrMult
+    dailyTrades += 1
+
+if shortSignal and canTrade and noPosition
+    strategy.entry("Short", strategy.short)
+    entryPrice := close
+    trailStop  := close + atr * trailAtrMult
+    dailyTrades += 1
+
+// === TRAILING STOP ===
+trailDist = atr * trailAtrMult
+
+if strategy.position_size > 0
+    newStop = close - trailDist
+    trailStop := na(trailStop) ? newStop : math.max(trailStop, newStop)
+else if strategy.position_size < 0
+    newStop = close + trailDist
+    trailStop := na(trailStop) ? newStop : math.min(trailStop, newStop)
+
+// Exit: Trailing Stop
+if strategy.position_size > 0 and not na(trailStop) and low <= trailStop
+    strategy.close("Long", comment="Trail Stop")
+    trailStop  := na
+    entryPrice := na
+
+if strategy.position_size < 0 and not na(trailStop) and high >= trailStop
+    strategy.close("Short", comment="Trail Stop")
+    trailStop  := na
+    entryPrice := na
+
+// Exit: Take Profit
+if useTakeProfit and not na(entryPrice)
+    tpDist = atr * tpAtrMult
+    if strategy.position_size > 0 and high >= entryPrice + tpDist
+        strategy.close("Long", comment="Take Profit")
+        trailStop  := na
+        entryPrice := na
+    if strategy.position_size < 0 and low <= entryPrice - tpDist
+        strategy.close("Short", comment="Take Profit")
+        trailStop  := na
+        entryPrice := na
+
+// Exit: Supertrend Flip gegen Position
+if strategy.position_size > 0 and stFlipBear
+    strategy.close("Long", comment="ST Flip Exit")
+    trailStop  := na
+    entryPrice := na
+
+if strategy.position_size < 0 and stFlipBull
+    strategy.close("Short", comment="ST Flip Exit")
+    trailStop  := na
+    entryPrice := na
+
+// EOD Flat
+if currentHour >= tradeEnd and strategy.position_size != 0
+    strategy.close_all(comment="EOD Flat")
+    trailStop  := na
+    entryPrice := na
+
+// === PLOTS ===
+stColor = stDir == -1 ? color.green : color.red
+plot(stLine, "Supertrend", color=stColor, linewidth=2)
+plot(not na(trailStop) ? trailStop : na, "Trail Stop", color=color.orange, style=plot.style_stepline)
+
+// Take Profit Level
+tpLevel = useTakeProfit and not na(entryPrice) ?
+     (strategy.position_size > 0 ? entryPrice + atr * tpAtrMult :
+      strategy.position_size < 0 ? entryPrice - atr * tpAtrMult : na) : na
+plot(tpLevel, "TP Level", color=color.new(color.blue, 40), style=plot.style_stepline)
+
+// Entry Markers
+plotshape(longSignal  and noPosition, "Long Signal",  shape.triangleup,   location.belowbar, color.green, size=size.small)
+plotshape(shortSignal and noPosition, "Short Signal", shape.triangledown, location.abovebar, color.red,   size=size.small)
+
+// Volume Regime Background
+bgcolor(highVolRegime ? color.new(color.blue, 93) : na, title="High Volume Regime")

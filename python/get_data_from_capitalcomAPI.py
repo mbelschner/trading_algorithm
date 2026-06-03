@@ -34,14 +34,14 @@ headers = {
 
 #get historical data
 
-epic = "VIX"
-resolution = "MINUTE_15"
+epic = "EURNZD"
+resolution = "MINUTE_5"
 
 #try out the for loop
 today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-end_date = today - timedelta(days=2)
-start_date = datetime(2019, 2, 22)  #22.02.2019
-step = timedelta(days=5)
+end_date = datetime(2023, 12, 31)
+start_date = datetime(2022, 1, 1)  #22.02.2019
+step = timedelta(days=3)
 
 # Ergebnisliste
 all_data = []

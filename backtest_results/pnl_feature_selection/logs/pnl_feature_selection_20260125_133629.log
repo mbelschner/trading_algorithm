@@ -1,0 +1,4 @@
+[2026-01-25 13:36:29] [INFO] Pipeline started 
+[2026-01-25 13:36:29] [INFO] Loading features from: feature_cache/GOLD_MINUTE_15_features_all.csv 
+[2026-01-25 13:36:29] [INFO] Creating semantic feature groups... 
+[2026-01-25 13:36:30] [INFO] Feature grouping complete: 61 groups created 

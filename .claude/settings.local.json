@@ -16,7 +16,14 @@
       "Bash(del nul)",
       "Bash(rm:*)",
       "Bash(python:*)",
-      "Bash(del \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\r\\\\03_pnl_simulation.R\")"
+      "Bash(del \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\r\\\\03_pnl_simulation.R\")",
+      "Bash(powershell -Command \"Get-Content ''c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\price_data\\\\GOLD_MINUTE_15.csv'' -Head 5\")",
+      "Bash(powershell -Command \"Get-Content ''c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\labelled_data\\\\GOLD_MINUTE_15_labeled.csv'' -Head 5\")",
+      "Bash(powershell -Command:*)",
+      "Bash(\"C:\\\\Program Files\\\\R\\\\R-4.5.2\\\\bin\\\\Rscript.exe\" -e \"source\\(''r/03_pnl_feature_selection.R''\\)\")",
+      "WebSearch",
+      "Bash(git push *)",
+      "Bash(git fetch *)"
     ]
   }
 }

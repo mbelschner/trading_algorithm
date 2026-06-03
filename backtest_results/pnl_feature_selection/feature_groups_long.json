@@ -1,0 +1,12 @@
+{
+  "LONG_TOP_01_10": ["volume_roll_sd_20", "volume_ratio_roll_mean_50", "VIX_rsi_14_lag20", "volume_ratio_roll_mean_20", "DXY_volume_roc_10_lag20", "volume_roll_mean_50", "close_roll_sd_50", "body_pct", "DXY_volume_sma_20_lag20", "SILVER_volume_lag8"],
+  "LONG_TOP_11_20": ["volume_roll_sd_50", "close_roll_sd_10", "volume_ma_20", "DXY_volume_roc_5_lag20", "SILVER_volume_roc_5_lag20", "hour_range", "SILVER_volume_sma_20_lag20", "DXY_volume_ratio", "volume_ratio_zscore_50", "SILVER_volume_ratio_lag4"],
+  "LONG_TOP_21_30": ["SILVER_volume_ratio", "VIX_volume_roc_10_lag20", "volume_ratio_roll_mean_10", "volume_zscore_20", "volume_ratio_lag10", "day_of_week", "DXY_di_plus_14_lag8", "VIX_volume_roc_5_lag20", "volume_ratio_roll_sd_50", "SILVER_volume_roc_10_lag8"],
+  "LONG_RANDOM_01": ["DXY_macd_diff_lag8", "stoch_k_lag5", "DXY_adx_14_lag1", "momentum_20_d2", "ema_21_slope_lag10", "adx_14_lag2", "DXY_volume_roc_5", "VIX_volume_roc_10_lag4", "rsi_28_lag10", "aroon_oscillator_lag1"],
+  "LONG_RANDOM_02": ["SILVER_macd_diff_lag1", "DXY_volume_sma_20_lag8", "rsi_14_roll_mean_50", "DXY_close_lag20", "aroon_up", "obv", "VIX_di_plus_14_lag4", "SILVER_di_plus_14_lag20", "SILVER_rsi_14_lag20", "adx_14_d2"],
+  "LONG_RANDOM_03": ["VIX_macd_diff_lag4", "bb_bandwidth_20_roll_mean_50", "stoch_d", "VIX_volume_ratio_lag8", "SILVER_volume_ratio_lag8", "day_of_month", "SILVER_adx_14_lag1", "DXY_volume_roc_10_lag1", "DXY_adx_14", "SILVER_volume_sma_20_lag1"],
+  "LONG_RANDOM_04": ["SILVER_obv_lag20", "ema_50_lag10", "VIX_volume_roc_5_lag4", "SILVER_macd_signal_lag8", "SILVER_volume_sma_20", "volume_zscore_50", "SILVER_close", "rsi_14_roll_sd_50", "SILVER_volume_lag20", "volume_ratio_lag3"],
+  "LONG_RANDOM_05": ["VIX_volume_ratio_lag4", "bb_bandwidth_20_roll_sd_20", "DXY_volume_roc_5_lag1", "SILVER_volume_lag4", "VIX_macd_lag4", "SILVER_macd_diff_lag20", "SILVER_adx_14_lag8", "DXY_macd_diff_lag20", "volume_ratio_zscore_10", "rsi_14_roll_sd_20"],
+  "LONG_RANDOM_06": ["SILVER_volume_roc_5", "bb_bandwidth_20_roll_sd_50", "adx_14_d1", "DXY_adx_14_lag8", "DXY_adx_14_lag4", "VIX_volume_ratio_lag20", "rsi_volume_interaction", "DXY_volume_ratio_lag8", "close_roll_sd_20", "VIX_di_minus_14"],
+  "LONG_RANDOM_07": ["VIX_macd_signal_lag8", "adx_14_lag10", "momentum_5", "VIX_di_minus_14_lag4", "SILVER_volume_roc_5_lag4", "SILVER_adx_14_lag20", "DXY_volume_sma_20_lag1", "SILVER_macd_lag20", "SILVER_volume_roc_10_lag4", "rsi_14_zscore_50"]
+}

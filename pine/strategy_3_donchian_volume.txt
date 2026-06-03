@@ -1,0 +1,146 @@
+// ============================================================================
+// Strategy 3: Donchian Breakout + Volume Gate
+// Timeframe: 15min | Instrument: Gold (XAUUSD)
+// Logik: Donchian Channel Breakout (N-Perioden High/Low).
+//        Entry nur bei überdurchschnittlichem Volumen.
+//        Kürzerer Lookback als klassisch (20 statt 50) für 15min.
+//        Session-Filter + ATR Trailing Stop.
+// ============================================================================
+
+//@version=6
+strategy("Donchian Breakout + Volume [Gold 15m]",
+     overlay        = true,
+     initial_capital = 100000,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 5,
+     commission_type  = strategy.commission.percent,
+     commission_value = 0.005,
+     slippage        = 1,
+     calc_on_every_tick = false)
+
+// === INPUTS ===
+// Donchian Channel
+dcLength       = input.int(20, "Donchian Channel Länge", minval=5, maxval=100)
+dcExitLength   = input.int(10, "Donchian Exit Länge (optional)", minval=3, maxval=50)
+useExitChannel = input.bool(false, "Exit-Channel statt Trailing Stop")
+
+// Volume Filter
+volLookback    = input.int(20, "Volume SMA Lookback")
+volMinMulti    = input.float(1.3, "Min Volume Multiplikator", step=0.1)
+
+// Trend-Filter: EMA als Richtungsfilter
+useTrendFilter = input.bool(true, "EMA Trend-Filter aktivieren")
+emaLength      = input.int(100, "EMA Länge für Trend-Filter", minval=20)
+
+// Session-Filter (CET)
+tradeStart     = input.int(0,  "Trade Start (Stunde CET)", minval=0, maxval=23)
+tradeEnd       = input.int(19, "Trade Ende (Stunde CET)",  minval=0, maxval=23)
+avoidDeadZone  = input.bool(true, "10:00-14:00 Dead Zone meiden")
+
+// Trailing Stop
+atrLength      = input.int(14, "ATR Länge")
+trailAtrMult   = input.float(2.0, "Trailing Stop ATR-Multiplikator", step=0.1)
+
+// Max Trades pro Tag
+maxTradesPerDay = input.int(2, "Max Trades pro Tag", minval=1, maxval=5)
+
+// === BERECHNUNGEN ===
+tz = "Europe/Vienna"
+currentHour = hour(time, tz)
+
+// Session-Filter
+inDeadZone = currentHour >= 10 and currentHour < 14
+sessionOk  = currentHour >= tradeStart and currentHour < tradeEnd
+if avoidDeadZone and inDeadZone
+    sessionOk := false
+
+// Donchian Channels
+dcUpper = ta.highest(high, dcLength)
+dcLower = ta.lowest(low, dcLength)
+dcMid   = (dcUpper + dcLower) / 2
+
+// Exit Channel (kürzerer Lookback)
+exitUpper = ta.highest(high, dcExitLength)
+exitLower = ta.lowest(low, dcExitLength)
+
+// Trend-Filter
+ema = ta.ema(close, emaLength)
+trendUp   = not useTrendFilter or close > ema
+trendDown = not useTrendFilter or close < ema
+
+// Volume Gate
+volSma   = ta.sma(volume, volLookback)
+volumeOk = volume > volSma * volMinMulti
+
+// ATR
+atr = ta.atr(atrLength)
+
+// === BREAKOUT DETECTION ===
+// Close über/unter dem VORHERIGEN Donchian Channel
+breakoutUp   = close > dcUpper[1] and volumeOk and trendUp   and sessionOk
+breakoutDown = close < dcLower[1] and volumeOk and trendDown and sessionOk
+
+// === TRADE COUNTER ===
+var int dailyTrades = 0
+newDay = ta.change(dayofweek(time, tz)) != 0
+if newDay
+    dailyTrades := 0
+
+canTrade = dailyTrades < maxTradesPerDay
+
+// === ENTRY ===
+noPosition = strategy.position_size == 0
+
+if breakoutUp and canTrade and noPosition
+    strategy.entry("Long", strategy.long)
+    dailyTrades += 1
+
+if breakoutDown and canTrade and noPosition
+    strategy.entry("Short", strategy.short)
+    dailyTrades += 1
+
+// === EXIT LOGIK ===
+var float trailStop = na
+
+if useExitChannel
+    // Exit via kürzerer Donchian Channel
+    if strategy.position_size > 0 and low < exitLower[1]
+        strategy.close("Long", comment="DC Exit")
+    if strategy.position_size < 0 and high > exitUpper[1]
+        strategy.close("Short", comment="DC Exit")
+else
+    // ATR Trailing Stop
+    trailDist = atr * trailAtrMult
+
+    if strategy.position_size > 0
+        newStop = close - trailDist
+        trailStop := na(trailStop) ? newStop : math.max(trailStop, newStop)
+    else if strategy.position_size < 0
+        newStop = close + trailDist
+        trailStop := na(trailStop) ? newStop : math.min(trailStop, newStop)
+    else
+        trailStop := na
+
+    if strategy.position_size > 0 and not na(trailStop) and low <= trailStop
+        strategy.close("Long", comment="Trail Stop")
+        trailStop := na
+
+    if strategy.position_size < 0 and not na(trailStop) and high >= trailStop
+        strategy.close("Short", comment="Trail Stop")
+        trailStop := na
+
+// EOD Flat
+if currentHour >= tradeEnd and strategy.position_size != 0
+    strategy.close_all(comment="EOD Flat")
+    trailStop := na
+
+// === PLOTS ===
+plot(dcUpper, "DC Upper", color=color.new(color.green, 30))
+plot(dcLower, "DC Lower", color=color.new(color.red, 30))
+plot(dcMid,   "DC Mid",   color=color.new(color.gray, 50), style=plot.style_stepline)
+plot(useTrendFilter ? ema : na, "Trend EMA", color=color.blue)
+plot(not na(trailStop) ? trailStop : na, "Trail Stop", color=color.orange, style=plot.style_stepline)
+
+// Breakout Markers
+plotshape(breakoutUp and noPosition,   "Breakout Up",   shape.triangleup,   location.belowbar, color.green, size=size.small)
+plotshape(breakoutDown and noPosition, "Breakout Down", shape.triangledown, location.abovebar, color.red,   size=size.small)

@@ -1,0 +1,122 @@
+// ============================================================================
+// Strategy 1: Asia Range Breakout
+// Timeframe: 15min | Instrument: Gold (XAUUSD)
+// Logik: Asia Session (00:00-08:00 CET) definiert Range.
+//        Breakout-Entry während US Session (14:00-19:00 CET)
+//        mit Volume-Bestätigung und ATR Trailing Stop.
+// ============================================================================
+
+//@version=6
+strategy("Asia Range Breakout [Gold 15m]",
+     overlay        = true,
+     initial_capital = 100000,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 5,
+     commission_type  = strategy.commission.percent,
+     commission_value = 0.005,
+     slippage        = 1,
+     calc_on_every_tick = false)
+
+// === INPUTS ===
+// Session-Zeiten (CET/Vienna)
+asiaStart     = input.int(0,  "Asia Session Start (Stunde CET)", minval=0, maxval=23)
+asiaEnd       = input.int(8,  "Asia Session Ende (Stunde CET)",  minval=0, maxval=23)
+tradeStart    = input.int(14, "Trade Window Start (Stunde CET)", minval=0, maxval=23)
+tradeEnd      = input.int(19, "Trade Window Ende (Stunde CET)",  minval=0, maxval=23)
+
+// Breakout-Parameter
+breakoutBuffer  = input.float(0.3, "Breakout Buffer (ATR-Multiplikator)", step=0.1)
+volMultiplier   = input.float(1.3, "Min. Volume vs 20-SMA", step=0.1)
+
+// Trailing Stop
+atrLength       = input.int(14, "ATR Länge")
+trailAtrMult    = input.float(2.0, "Trailing Stop ATR-Multiplikator", step=0.1)
+
+// Max Trades pro Tag
+maxTradesPerDay = input.int(2, "Max Trades pro Tag", minval=1, maxval=5)
+
+// === BERECHNUNGEN ===
+tz = "Europe/Vienna"
+currentHour = hour(time, tz)
+
+isAsiaSession = currentHour >= asiaStart and currentHour < asiaEnd
+isTradeWindow = currentHour >= tradeStart and currentHour < tradeEnd
+
+atr = ta.atr(atrLength)
+volSma = ta.sma(volume, 20)
+volumeOk = volume > volSma * volMultiplier
+
+// === ASIA RANGE TRACKING ===
+var float asiaHigh = na
+var float asiaLow  = na
+var bool  asiaRangeSet = false
+
+// Reset bei neuem Asia-Session Start
+newAsiaSession = isAsiaSession and not isAsiaSession[1]
+if newAsiaSession
+    asiaHigh := high
+    asiaLow  := low
+    asiaRangeSet := false
+
+// Update während Asia Session
+if isAsiaSession
+    asiaHigh := math.max(nz(asiaHigh, high), high)
+    asiaLow  := math.min(nz(asiaLow, low), low)
+
+// Range finalisieren wenn Asia endet
+if not isAsiaSession and isAsiaSession[1]
+    asiaRangeSet := true
+
+// === TRADE COUNTER ===
+var int dailyTrades = 0
+newDay = ta.change(dayofweek(time, tz)) != 0
+if newDay
+    dailyTrades := 0
+
+canTrade = dailyTrades < maxTradesPerDay
+
+// === ENTRY LOGIK ===
+breakoutUp   = isTradeWindow and asiaRangeSet and close > asiaHigh + atr * breakoutBuffer and volumeOk and canTrade
+breakoutDown = isTradeWindow and asiaRangeSet and close < asiaLow  - atr * breakoutBuffer and volumeOk and canTrade
+
+noPosition = strategy.position_size == 0
+
+if breakoutUp and noPosition
+    strategy.entry("Long", strategy.long)
+    dailyTrades += 1
+
+if breakoutDown and noPosition
+    strategy.entry("Short", strategy.short)
+    dailyTrades += 1
+
+// === TRAILING STOP ===
+var float trailStop = na
+trailDist = atr * trailAtrMult
+
+if strategy.position_size > 0
+    newStop = close - trailDist
+    trailStop := na(trailStop) ? newStop : math.max(trailStop, newStop)
+else if strategy.position_size < 0
+    newStop = close + trailDist
+    trailStop := na(trailStop) ? newStop : math.min(trailStop, newStop)
+else
+    trailStop := na
+
+// Exit via Trailing Stop
+if strategy.position_size > 0 and not na(trailStop) and low <= trailStop
+    strategy.close("Long", comment="Trail Stop")
+    trailStop := na
+
+if strategy.position_size < 0 and not na(trailStop) and high >= trailStop
+    strategy.close("Short", comment="Trail Stop")
+    trailStop := na
+
+// End-of-Day Flat (19:00 CET)
+if currentHour >= tradeEnd and strategy.position_size != 0
+    strategy.close_all(comment="EOD Flat")
+    trailStop := na
+
+// === PLOTS ===
+plot(asiaRangeSet ? asiaHigh : na, "Asia High", color=color.new(color.green, 50), style=plot.style_stepline)
+plot(asiaRangeSet ? asiaLow  : na, "Asia Low",  color=color.new(color.red, 50),   style=plot.style_stepline)
+plot(not na(trailStop) ? trailStop : na, "Trail Stop", color=color.orange, style=plot.style_stepline)

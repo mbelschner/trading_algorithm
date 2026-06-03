@@ -63,10 +63,10 @@ EPIC <- "GOLD"
 INTERVAL <- "MINUTE_15"
 
 # Label version selection (configurable)
-LABEL_VERSION <- "enhanced_neutral"  # Options: "enhanced_neutral", "raw", "standard", "unfiltered"
+LABEL_VERSION <- "standard"  # Options: "enhanced_neutral", "raw", "standard", "unfiltered"
 
 # Additional markets for feature analysis
-ADDITIONAL_MARKETS <- c("DXY", "VIX", "SILVER")  # Set to NULL or c() to disable
+ADDITIONAL_MARKETS <- c()  # Set to NULL or c() to disable
 ADDITIONAL_MARKETS_LAG_PERIODS <- c(1, 4, 8, 20)  # Lag periods for additional market features
 
 # Feature caching
@@ -545,10 +545,10 @@ cat("\n=== STEP 7.5a: SIMPLE PARAMETER GRID SEARCH (LONG MODEL) ===\n")
 # Define parameter grid
 param_grid <- expand.grid(
   max_depth = c(3, 4, 5),
-  eta = c(0.05, 0.1),
-  gamma = c(0, 0.1, 0.2),
-  lambda = c(1.0, 1.5, 2.0),
-  min_child_weight = c(5, 10, 15, 20),
+  eta = c(0.1),
+  gamma = c(0.1),
+  lambda = c(1.5),
+  min_child_weight = c(10, 15, 20),
   stringsAsFactors = FALSE
 )
 

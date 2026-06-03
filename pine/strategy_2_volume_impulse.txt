@@ -1,0 +1,145 @@
+// ============================================================================
+// Strategy 2: Volume Impulse
+// Timeframe: 15min | Instrument: Gold (XAUUSD)
+// Logik: Volumen-Spikes (>2x Durchschnitt) als Entry-Trigger.
+//        Einstieg in Richtung der Impulse-Kerze.
+//        Session-Filter + ATR Trailing Stop.
+//        Idee: Große Volumen-Spikes zeigen institutionelle Aktivität an.
+// ============================================================================
+
+//@version=6
+strategy("Volume Impulse [Gold 15m]",
+     overlay        = true,
+     initial_capital = 100000,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 5,
+     commission_type  = strategy.commission.percent,
+     commission_value = 0.005,
+     slippage        = 1,
+     calc_on_every_tick = false)
+
+// === INPUTS ===
+// Volume Spike Detection
+volLookback     = input.int(30,  "Volume SMA Lookback", minval=5)
+volSpikeMulti   = input.float(2.0, "Volume Spike Multiplikator", step=0.1)
+minBodyRatio    = input.float(0.5, "Min Body/Range Ratio (Kerzenqualität)", step=0.1)
+
+// Session-Filter (CET)
+useSessionFilter = input.bool(true, "Session-Filter aktivieren")
+session1Start    = input.int(0,  "Session 1 Start (Asia)", minval=0, maxval=23)
+session1End      = input.int(8,  "Session 1 Ende",         minval=0, maxval=23)
+session2Start    = input.int(14, "Session 2 Start (US)",   minval=0, maxval=23)
+session2End      = input.int(19, "Session 2 Ende",         minval=0, maxval=23)
+
+// Trailing Stop
+atrLength       = input.int(14, "ATR Länge")
+trailAtrMult    = input.float(1.8, "Trailing Stop ATR-Multiplikator", step=0.1)
+
+// Bestätigung: nächste Kerze muss in gleiche Richtung schließen
+useConfirmation = input.bool(true, "Bestätigungskerze abwarten")
+
+// Max Trades pro Tag
+maxTradesPerDay = input.int(2, "Max Trades pro Tag", minval=1, maxval=5)
+
+// === BERECHNUNGEN ===
+tz = "Europe/Vienna"
+currentHour = hour(time, tz)
+
+inSession1 = currentHour >= session1Start and currentHour < session1End
+inSession2 = currentHour >= session2Start and currentHour < session2End
+sessionOk  = not useSessionFilter or inSession1 or inSession2
+
+atr    = ta.atr(atrLength)
+volSma = ta.sma(volume, volLookback)
+
+// Volumen-Spike Detection
+isVolumeSpike = volume > volSma * volSpikeMulti
+
+// Kerzenqualität — Doji/Spinning Tops ignorieren
+candleRange = high - low
+candleBody  = math.abs(close - open)
+bodyRatio   = candleRange > 0 ? candleBody / candleRange : 0
+qualityCandle = bodyRatio >= minBodyRatio
+
+// Impulse-Richtung
+bullishImpulse = close > open
+bearishImpulse = close < open
+
+// Spike-Signale (mit Qualitätsfilter)
+bullSpike = isVolumeSpike and bullishImpulse and qualityCandle
+bearSpike = isVolumeSpike and bearishImpulse and qualityCandle
+
+// === BESTÄTIGUNGS-LOGIK ===
+var bool pendingLong  = false
+var bool pendingShort = false
+
+if useConfirmation
+    if bullSpike
+        pendingLong  := true
+        pendingShort := false
+    else if bearSpike
+        pendingShort := true
+        pendingLong  := false
+
+// Bestätigung: nächste Kerze schließt in gleiche Richtung
+confirmedLong  = useConfirmation ? (pendingLong[1]  and close > open) : bullSpike
+confirmedShort = useConfirmation ? (pendingShort[1] and close < open) : bearSpike
+
+// Reset pending nach Bestätigungs-Bar
+if useConfirmation
+    if pendingLong[1]
+        pendingLong := false
+    if pendingShort[1]
+        pendingShort := false
+
+// === TRADE COUNTER ===
+var int dailyTrades = 0
+newDay = ta.change(dayofweek(time, tz)) != 0
+if newDay
+    dailyTrades := 0
+
+canTrade = dailyTrades < maxTradesPerDay
+
+// === ENTRY ===
+noPosition = strategy.position_size == 0
+
+if confirmedLong and sessionOk and canTrade and noPosition
+    strategy.entry("Long", strategy.long)
+    dailyTrades += 1
+
+if confirmedShort and sessionOk and canTrade and noPosition
+    strategy.entry("Short", strategy.short)
+    dailyTrades += 1
+
+// === TRAILING STOP ===
+var float trailStop = na
+trailDist = atr * trailAtrMult
+
+if strategy.position_size > 0
+    newStop = close - trailDist
+    trailStop := na(trailStop) ? newStop : math.max(trailStop, newStop)
+else if strategy.position_size < 0
+    newStop = close + trailDist
+    trailStop := na(trailStop) ? newStop : math.min(trailStop, newStop)
+else
+    trailStop := na
+
+if strategy.position_size > 0 and not na(trailStop) and low <= trailStop
+    strategy.close("Long", comment="Trail Stop")
+    trailStop := na
+
+if strategy.position_size < 0 and not na(trailStop) and high >= trailStop
+    strategy.close("Short", comment="Trail Stop")
+    trailStop := na
+
+// EOD Flat
+if currentHour >= 19 and strategy.position_size != 0
+    strategy.close_all(comment="EOD Flat")
+    trailStop := na
+
+// === PLOTS ===
+plot(not na(trailStop) ? trailStop : na, "Trail Stop", color=color.orange, style=plot.style_stepline)
+
+// Volume Spike Marker
+plotshape(bullSpike, "Bull Spike", shape.triangleup,   location.belowbar, color.green, size=size.small)
+plotshape(bearSpike, "Bear Spike", shape.triangledown,  location.abovebar, color.red,   size=size.small)

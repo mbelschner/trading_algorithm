@@ -1,0 +1,153 @@
+// ============================================================================
+// Strategy 4: EMA Trend + MACD Momentum + Volume Gate
+// Timeframe: 15min | Instrument: Gold (XAUUSD)
+// Logik: EMA-Crossover für Richtung, MACD-Histogramm für Momentum-
+//        Bestätigung, Volume-Gate als finaler Filter.
+//        Designed für schnellere Entries als klassisches Trend-Following
+//        durch aggressivere EMA-Paarung + Session-Timing.
+// ============================================================================
+
+//@version=6
+strategy("EMA + MACD + Volume [Gold 15m]",
+     overlay        = true,
+     initial_capital = 100000,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 5,
+     commission_type  = strategy.commission.percent,
+     commission_value = 0.005,
+     slippage        = 1,
+     calc_on_every_tick = false)
+
+// === INPUTS ===
+// EMA Crossover
+emaFast       = input.int(8,  "EMA Fast", minval=3, maxval=50)
+emaSlow       = input.int(21, "EMA Slow", minval=10, maxval=100)
+emaTrend      = input.int(100, "EMA Trend (übergeordnet)", minval=50)
+
+// MACD
+macdFast      = input.int(12, "MACD Fast")
+macdSlow      = input.int(26, "MACD Slow")
+macdSignal    = input.int(9,  "MACD Signal")
+
+// Volume
+volLookback   = input.int(20, "Volume SMA Lookback")
+volMinMulti   = input.float(1.2, "Min Volume Multiplikator", step=0.1)
+
+// Session-Filter (CET)
+useSessionFilter = input.bool(true, "Session-Filter aktivieren")
+avoidDeadZone    = input.bool(true, "10:00-14:00 meiden")
+
+// Trailing Stop
+atrLength     = input.int(14, "ATR Länge")
+trailAtrMult  = input.float(2.0, "Trailing Stop ATR-Multiplikator", step=0.1)
+initialSlMult = input.float(2.5, "Initial Stop Loss ATR-Multiplikator", step=0.1)
+
+// Max Trades pro Tag
+maxTradesPerDay = input.int(2, "Max Trades pro Tag", minval=1, maxval=5)
+
+// === BERECHNUNGEN ===
+tz = "Europe/Vienna"
+currentHour = hour(time, tz)
+
+// Session
+inAsia    = currentHour >= 0  and currentHour < 8
+inEU      = currentHour >= 8  and currentHour < 14
+inUS      = currentHour >= 14 and currentHour < 19
+inDeadZone = currentHour >= 10 and currentHour < 14
+
+sessionOk = not useSessionFilter or inAsia or inUS
+if avoidDeadZone and inDeadZone
+    sessionOk := false
+
+// EMAs
+fastEma  = ta.ema(close, emaFast)
+slowEma  = ta.ema(close, emaSlow)
+trendEma = ta.ema(close, emaTrend)
+
+// EMA Crossover (frischer Cross, max 3 Bars alt)
+bullCross = ta.crossover(fastEma, slowEma)
+bearCross = ta.crossunder(fastEma, slowEma)
+
+recentBullCross = bullCross or bullCross[1] or bullCross[2]
+recentBearCross = bearCross or bearCross[1] or bearCross[2]
+
+// Übergeordneter Trend
+trendBullish = close > trendEma
+trendBearish = close < trendEma
+
+// MACD
+[macdLine, signalLine, histLine] = ta.macd(close, macdFast, macdSlow, macdSignal)
+macdBullish = histLine > 0 and histLine > histLine[1]  // positiv UND steigend
+macdBearish = histLine < 0 and histLine < histLine[1]  // negativ UND fallend
+
+// Volume
+volSma   = ta.sma(volume, volLookback)
+volumeOk = volume > volSma * volMinMulti
+
+// ATR
+atr = ta.atr(atrLength)
+
+// === ENTRY SIGNALE ===
+longSignal  = recentBullCross and trendBullish and macdBullish and volumeOk and sessionOk
+shortSignal = recentBearCross and trendBearish and macdBearish and volumeOk and sessionOk
+
+// === TRADE COUNTER ===
+var int dailyTrades = 0
+newDay = ta.change(dayofweek(time, tz)) != 0
+if newDay
+    dailyTrades := 0
+
+canTrade = dailyTrades < maxTradesPerDay
+
+// === ENTRY ===
+noPosition = strategy.position_size == 0
+
+if longSignal and canTrade and noPosition
+    sl = close - atr * initialSlMult
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long SL", "Long", stop=sl)
+    dailyTrades += 1
+
+if shortSignal and canTrade and noPosition
+    sl = close + atr * initialSlMult
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short SL", "Short", stop=sl)
+    dailyTrades += 1
+
+// === TRAILING STOP (ersetzt Initial SL wenn im Profit) ===
+var float trailStop = na
+trailDist = atr * trailAtrMult
+
+if strategy.position_size > 0
+    newStop = close - trailDist
+    if na(trailStop)
+        trailStop := newStop
+    else
+        trailStop := math.max(trailStop, newStop)
+    // Trailing Stop übernimmt wenn besser als Initial SL
+    strategy.exit("Long Trail", "Long", stop=trailStop)
+
+else if strategy.position_size < 0
+    newStop = close + trailDist
+    if na(trailStop)
+        trailStop := newStop
+    else
+        trailStop := math.min(trailStop, newStop)
+    strategy.exit("Short Trail", "Short", stop=trailStop)
+else
+    trailStop := na
+
+// EOD Flat
+if currentHour >= 19 and strategy.position_size != 0
+    strategy.close_all(comment="EOD Flat")
+    trailStop := na
+
+// === PLOTS ===
+plot(fastEma,  "Fast EMA",  color=color.new(color.green, 30))
+plot(slowEma,  "Slow EMA",  color=color.new(color.red, 30))
+plot(trendEma, "Trend EMA", color=color.new(color.blue, 30), linewidth=2)
+plot(not na(trailStop) ? trailStop : na, "Trail Stop", color=color.orange, style=plot.style_stepline)
+
+// Entry Markers
+plotshape(longSignal  and noPosition, "Long Signal",  shape.triangleup,   location.belowbar, color.green, size=size.small)
+plotshape(shortSignal and noPosition, "Short Signal", shape.triangledown, location.abovebar, color.red,   size=size.small)
