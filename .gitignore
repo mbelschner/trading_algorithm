@@ -51,6 +51,9 @@ vignettes/*.pdf
 *_cache/
 /cache/
 
+# Backtest runner RDS cache
+r/multi_backtest_runner/cache/
+
 # Temporary files created by R markdown
 *.utf8.md
 *.knit.md
