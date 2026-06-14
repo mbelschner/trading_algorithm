@@ -23,7 +23,15 @@
       "Bash(\"C:\\\\Program Files\\\\R\\\\R-4.5.2\\\\bin\\\\Rscript.exe\" -e \"source\\(''r/03_pnl_feature_selection.R''\\)\")",
       "WebSearch",
       "Bash(git push *)",
-      "Bash(git fetch *)"
+      "Bash(git fetch *)",
+      "Bash(sort -t'|' -k2 -rn)",
+      "PowerShell(Get-ChildItem -Recurse -File | Where-Object { $_.Length -gt 50MB } | Sort-Object Length -Descending | Select-Object -First 20 | ForEach-Object { \"{0:N0} MB  {1}\" -f \\($_.Length/1MB\\), $_.FullName.Replace\\(\"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\\", \"\"\\) })",
+      "PowerShell(git reset --soft origin/main)",
+      "PowerShell(git rm --cached -r price_data/ databento_data/ \"backtest_results/pnl_feature_selection/cache/\" 2>&1)",
+      "PowerShell(git rm --cached \"export/GOLD_MINUTE_15.csv\" \"labelled_data/GOLD_MINUTE_15_labeled.csv\" \"labelled_data/GOLD_MINUTE_15_labeled_enhanced_neutral.csv\" \"labelled_data/GOLD_MINUTE_15_labeled_raw.csv\" \"labelled_data/GOLD_MINUTE_15_meta_labeled.csv\" \"labelled_data/GOLD_MINUTE_15_strategy_comparison.csv\" 2>&1)",
+      "PowerShell(git push 2>&1)",
+      "PowerShell(git rm --cached python/.env ctrader_setup/ctrader_spotware_app_credentials.txt 2>&1)",
+      "PowerShell(git commit --amend --no-edit 2>&1)"
     ]
   }
 }

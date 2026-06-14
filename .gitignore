@@ -1,3 +1,15 @@
+# Secrets / credentials
+python/.env
+ctrader_setup/ctrader_spotware_app_credentials.txt
+
+# Large data files - excluded from GitHub
+price_data/
+databento_data/
+feature_cache/
+backtest_results/pnl_feature_selection/cache/
+export/GOLD_MINUTE_15.csv
+labelled_data/*.csv
+
 # cTrader API – sensitive files
 ctrader_setup/config.py
 ctrader_setup/tokens.json
