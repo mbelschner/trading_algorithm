@@ -129,7 +129,9 @@ def exchange_code_for_tokens(auth_code):
     )
     resp.raise_for_status()
     tokens = resp.json()
-    if "errorCode" in tokens:
+    # Die API liefert "errorCode": None auch im Erfolgsfall mit.
+    # Nur abbrechen, wenn errorCode tatsächlich gesetzt ist:
+    if tokens.get("errorCode"):
         print(f"[FEHLER] Token-Exchange: {tokens}")
         sys.exit(1)
     print("[OK] Access- und Refresh-Token erhalten.")
@@ -156,7 +158,26 @@ def fetch_trading_accounts(access_token):
         print("[FEHLER] Keine Trading-Accounts gefunden. Hast du dich mit dem richtigen Account eingeloggt?")
         sys.exit(1)
 
+    # Debug: zeige die tatsächlichen Feldnamen des ersten Accounts
+    print(f"[DEBUG] Verfügbare Felder pro Account: {list(accounts[0].keys())}")
+
     return accounts
+
+
+def _get_account_id(acc):
+    """Findet die ctidTraderAccountId unter den möglichen Feldnamen."""
+    for key in ("ctidTraderAccountId", "accountId", "traderLogin", "traderId"):
+        if key in acc and acc[key] is not None:
+            return acc[key]
+    # Fallback: erste Integer-artige ID
+    return acc.get("accountNumber")
+
+
+def _get_account_number(acc):
+    for key in ("accountNumber", "traderLogin", "accountId"):
+        if key in acc and acc[key] is not None:
+            return acc[key]
+    return "?"
 
 
 def select_account(accounts):
@@ -166,10 +187,10 @@ def select_account(accounts):
     print("-" * 70)
     for i, acc in enumerate(accounts):
         live_str = "LIVE" if acc.get("live", False) else "DEMO"
-        print(f"  [{i}] Account #{acc['accountNumber']}  ({live_str})  "
-              f"Broker: {acc.get('brokerName', 'n/a')}  "
-              f"Währung: {acc.get('depositCurrency', 'n/a')}  "
-              f"ctidTraderAccountId: {acc['traderLogin']}")
+        print(f"  [{i}] Account #{_get_account_number(acc)}  ({live_str})  "
+              f"Broker: {acc.get('brokerName') or acc.get('brokerTitle', 'n/a')}  "
+              f"Währung: {acc.get('depositCurrency') or acc.get('currency', 'n/a')}  "
+              f"ID: {_get_account_id(acc)}")
     print()
 
     # Default-Wahl: erstes Demo-Konto wenn USE_DEMO, sonst erstes Live
@@ -203,11 +224,11 @@ def main():
         "refreshToken": tokens["refreshToken"],
         "tokenType":    tokens.get("tokenType", "bearer"),
         "expiresIn":    tokens.get("expiresIn"),
-        "ctidTraderAccountId": selected["traderLogin"],
-        "accountNumber":       selected["accountNumber"],
+        "ctidTraderAccountId": _get_account_id(selected),
+        "accountNumber":       _get_account_number(selected),
         "isLive":              selected.get("live", False),
-        "brokerName":          selected.get("brokerName"),
-        "depositCurrency":     selected.get("depositCurrency"),
+        "brokerName":          selected.get("brokerName") or selected.get("brokerTitle"),
+        "depositCurrency":     selected.get("depositCurrency") or selected.get("currency"),
     }
 
     with open("tokens.json", "w", encoding="utf-8") as f:
@@ -216,8 +237,8 @@ def main():
     print()
     print("=" * 70)
     print(f"[OK] Tokens gespeichert in tokens.json")
-    print(f"     Account #{selected['accountNumber']} ({'LIVE' if selected.get('live') else 'DEMO'})")
-    print(f"     ctidTraderAccountId: {selected['traderLogin']}")
+    print(f"     Account #{_get_account_number(selected)} ({'LIVE' if selected.get('live') else 'DEMO'})")
+    print(f"     ctidTraderAccountId: {_get_account_id(selected)}")
     print("=" * 70)
     print()
     print("Nächster Schritt:  python 02_list_symbols.py")

@@ -7,8 +7,8 @@ Füge 'config.py' und 'tokens.json' zu deiner .gitignore hinzu.
 """
 
 # Aus deiner Spotware-Application:
-CLIENT_ID     = "YOUR_CLIENT_ID_HERE"
-CLIENT_SECRET = "YOUR_CLIENT_SECRET_HERE"
+CLIENT_ID     = "29871_vnE1zQD8MskYFZ72dX6RGK2BHrNFDuKtKyd9jgqbv5HJ2QMUsM"
+CLIENT_SECRET = "YBIL5BojmTANfa0tatTaMbxwypzEOlqJR5PO7t1tsHEbkMy26u"
 
 # Muss exakt mit der Redirect-URI übereinstimmen, die du bei
 # der App-Registrierung angegeben hast:

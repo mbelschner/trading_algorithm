@@ -24,11 +24,6 @@ import json
 import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
-
-# Default output directory: price_data/ctrader_data/ relative to project root
-_SCRIPT_DIR = Path(__file__).parent
-_DEFAULT_OUT_DIR = _SCRIPT_DIR.parent / "price_data" / "ctrader_data"
 
 from twisted.internet import reactor, task
 
@@ -38,6 +33,8 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAAccountAuthReq,
     ProtoOAGetTrendbarsReq,
     ProtoOAGetTrendbarsRes,
+    ProtoOASymbolByIdReq,
+    ProtoOASymbolByIdRes,
     ProtoOAErrorRes,
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
@@ -57,6 +54,16 @@ TIMEFRAMES = {
     "H1":  (ProtoOATrendbarPeriod.H1,     24, 365),
     "H4":  (ProtoOATrendbarPeriod.H4,      6, 730),
     "D1":  (ProtoOATrendbarPeriod.D1,      1, 3650),
+}
+
+TF_SUFFIX = {
+    "M1":  "MINUTE_1",
+    "M5":  "MINUTE_5",
+    "M15": "MINUTE_15",
+    "M30": "MINUTE_30",
+    "H1":  "HOUR_1",
+    "H4":  "HOUR_4",
+    "D1":  "DAY_1",
 }
 
 
@@ -135,19 +142,19 @@ def main():
     symbols = load_symbols()
     sym     = find_symbol(symbols, args.symbol)
     symbol_id = int(sym["symbolId"])
-    digits    = int(sym["digits"])
+    # digits werden NICHT mehr aus der CSV gelesen, sondern zur Laufzeit
+    # per ProtoOASymbolByIdReq von der API geholt (autoritativ + immer korrekt).
 
     period, bars_per_day, chunk_days = TIMEFRAMES[args.tf]
     from_dt = parse_date(args.from_date)
     to_dt   = parse_date(args.to_date)
-    _DEFAULT_OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = args.out or str(_DEFAULT_OUT_DIR / f"{args.symbol}_{args.tf}.csv")
+    out_path = args.out or f"{args.symbol}_{TF_SUFFIX[args.tf]}.csv"
 
     total_days = (to_dt - from_dt).days
     est_bars   = total_days * bars_per_day
     n_chunks   = max(1, (total_days + chunk_days - 1) // chunk_days)
 
-    print(f"Symbol:    {args.symbol} (ID {symbol_id}, digits={digits})")
+    print(f"Symbol:    {args.symbol} (ID {symbol_id})")
     print(f"Timeframe: {args.tf}")
     print(f"Range:     {args.from_date} → {args.to_date}  ({total_days} Tage)")
     print(f"Erwartet:  ~{est_bars:,} Bars in {n_chunks} Chunks à max {chunk_days} Tage")
@@ -162,6 +169,7 @@ def main():
         "chunk_idx":    0,
         "all_bars":     [],
         "start_time":   None,
+        "digits":       None,
     }
 
     def on_error(failure):
@@ -188,6 +196,23 @@ def main():
         d.addCallbacks(on_account_auth, on_error)
 
     def on_account_auth(response):
+        # Vor dem Daten-Download: Symbol-Details (digits) holen
+        req = ProtoOASymbolByIdReq()
+        req.ctidTraderAccountId = int(tokens["ctidTraderAccountId"])
+        req.symbolId.append(symbol_id)
+        d = client.send(req)
+        d.addCallbacks(on_symbol_details, on_error)
+
+    def on_symbol_details(response):
+        msg = Protobuf.extract(response)
+        if not isinstance(msg, ProtoOASymbolByIdRes) or len(msg.symbol) == 0:
+            print(f"[FEHLER] Konnte Symbol-Details nicht laden: {type(msg).__name__}")
+            reactor.stop()
+            return
+        full_sym = msg.symbol[0]
+        state["digits"] = full_sym.digits
+        print(f"[OK] Symbol-Details: digits={full_sym.digits}, "
+              f"pipPosition={full_sym.pipPosition}")
         state["start_time"] = time.time()
         request_next_chunk()
 
@@ -224,7 +249,7 @@ def main():
         bars = msg.trendbar
         print(f"{len(bars):>6} Bars")
         for b in bars:
-            state["all_bars"].append(decode_bar(b, digits))
+            state["all_bars"].append(decode_bar(b, state["digits"]))
 
         # Nächster Chunk startet am Ende des bisherigen
         state["current_from"] = state["pending_to"]

@@ -10,9 +10,9 @@
 NAME <- "RSI_MeanReversion"
 
 PARAM_GRID <- list(
-  period   = c(7L, 10L, 14L, 18L, 21L),
-  lower    = c(20, 25, 30),
-  upper    = c(70, 75, 80),
+  period   = c(7L, 10L, 14L, 18L, 21L, 24L),
+  lower    = c(20, 25, 30, 35),
+  upper    = c(65, 70, 75, 80),
   exit_mid = c(TRUE)
 )
 

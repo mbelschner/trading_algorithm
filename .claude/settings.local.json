@@ -31,7 +31,14 @@
       "PowerShell(git rm --cached \"export/GOLD_MINUTE_15.csv\" \"labelled_data/GOLD_MINUTE_15_labeled.csv\" \"labelled_data/GOLD_MINUTE_15_labeled_enhanced_neutral.csv\" \"labelled_data/GOLD_MINUTE_15_labeled_raw.csv\" \"labelled_data/GOLD_MINUTE_15_meta_labeled.csv\" \"labelled_data/GOLD_MINUTE_15_strategy_comparison.csv\" 2>&1)",
       "PowerShell(git push 2>&1)",
       "PowerShell(git rm --cached python/.env ctrader_setup/ctrader_spotware_app_credentials.txt 2>&1)",
-      "PowerShell(git commit --amend --no-edit 2>&1)"
+      "PowerShell(git commit --amend --no-edit 2>&1)",
+      "PowerShell(git -C \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\" checkout -b feature/backtest-perf-optimization 2>&1)",
+      "PowerShell(git -C $repo add \"r/multi_backtest_runner/backtest_runner_optimized.R\")",
+      "PowerShell($repo = \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\")",
+      "PowerShell(git -C $repo add \"r/multi_backtest_runner/strategies/silver_asia_breakout_v4_vectorized.R\")",
+      "PowerShell(git -C $repo add \"r/multi_backtest_runner/tests/verify_equivalence.R\" \".gitignore\")",
+      "PowerShell(Select-String -Path \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\symbols.csv\" -Pattern \"Brent|XBRENT|OilBrent|OIL\" | Where-Object { $_.Line -notmatch \"_SB|_SBE\" } | Select-Object -ExpandProperty Line | Select-Object -First 10)",
+      "PowerShell(Set-Location \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\"; $outDir = \"price_data\\\\ctrader_data\"; if \\(-not \\(Test-Path $outDir\\)\\) { New-Item -ItemType Directory -Path $outDir | Out-Null }; Get-ChildItem $outDir)"
     ]
   }
 }

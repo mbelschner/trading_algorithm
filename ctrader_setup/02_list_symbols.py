@@ -88,49 +88,61 @@ def main():
         d.addCallbacks(on_symbols, on_error)
 
     def on_symbols(response):
-        msg = Protobuf.extract(response)
-        if not isinstance(msg, ProtoOASymbolsListRes):
-            print(f"[FEHLER] Unerwartete Antwort: {type(msg).__name__}")
-            reactor.stop()
-            return
+        try:
+            msg = Protobuf.extract(response)
+            if not isinstance(msg, ProtoOASymbolsListRes):
+                print(f"[FEHLER] Unerwartete Antwort: {type(msg).__name__}")
+                reactor.stop()
+                return
 
-        symbols = msg.symbol
-        print(f"[OK] {len(symbols)} Symbole erhalten.")
+            symbols = msg.symbol
+            print(f"[OK] {len(symbols)} Symbole erhalten.")
 
-        # Sortieren nach Name für bessere Übersicht
-        sorted_syms = sorted(symbols, key=lambda s: s.symbolName)
+            # ProtoOALightSymbol hat NUR diese Felder:
+            #   symbolId, symbolName, enabled, baseAssetId,
+            #   quoteAssetId, symbolCategoryId, description
+            # 'digits'/'pipPosition' gibt es hier NICHT – die holt
+            # der Downloader (03_download.py) zur Laufzeit per
+            # ProtoOASymbolByIdReq.
 
-        with open("symbols.csv", "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "symbolId", "symbolName", "description", "digits",
-                "pipPosition", "enabled", "baseAsset", "quoteAsset",
-                "symbolCategory",
-            ])
-            for s in sorted_syms:
+            sorted_syms = sorted(symbols, key=lambda s: s.symbolName)
+
+            with open("symbols.csv", "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
                 writer.writerow([
-                    s.symbolId,
-                    s.symbolName,
-                    s.description if s.HasField("description") else "",
-                    s.digits if s.HasField("digits") else "",
-                    s.pipPosition if s.HasField("pipPosition") else "",
-                    "yes" if s.enabled else "no",
-                    s.baseAssetId if s.HasField("baseAssetId") else "",
-                    s.quoteAssetId if s.HasField("quoteAssetId") else "",
-                    s.symbolCategoryId if s.HasField("symbolCategoryId") else "",
+                    "symbolId", "symbolName", "description",
+                    "enabled", "symbolCategoryId",
                 ])
+                for s in sorted_syms:
+                    writer.writerow([
+                        s.symbolId,
+                        s.symbolName,
+                        s.description,
+                        "yes" if s.enabled else "no",
+                        s.symbolCategoryId,
+                    ])
 
-        print(f"[OK] Liste geschrieben nach: symbols.csv  ({len(sorted_syms)} Zeilen)")
-        print()
-        print("Beispiel-Auszug (erste 30):")
-        print(f"   {'ID':>8}  {'NAME':<15}  {'DIGITS':<7}  DESCRIPTION")
-        for s in sorted_syms[:30]:
-            desc = s.description if s.HasField("description") else ""
-            print(f"   {s.symbolId:>8}  {s.symbolName:<15}  {s.digits:<7}  {desc[:50]}")
-        if len(sorted_syms) > 30:
-            print(f"   ... ({len(sorted_syms) - 30} weitere in symbols.csv)")
+            print(f"[OK] Liste geschrieben nach: symbols.csv  ({len(sorted_syms)} Zeilen)")
+            print()
+            print("Beispiel-Auszug (erste 40 aktivierte):")
+            print(f"   {'ID':>8}  {'NAME':<18}  DESCRIPTION")
+            shown = 0
+            for s in sorted_syms:
+                if not s.enabled:
+                    continue
+                print(f"   {s.symbolId:>8}  {s.symbolName:<18}  {s.description[:45]}")
+                shown += 1
+                if shown >= 40:
+                    break
+            print(f"   ... (alle {len(sorted_syms)} Symbole in symbols.csv)")
+            print()
+            print("Tipp: Such in symbols.csv nach deinen Instrumenten, z.B.")
+            print("      Brent, XAU, XAG, GER40, US500, JPN225, STOXX, EURUSD ...")
 
-        reactor.stop()
+        except Exception as e:
+            print(f"[FEHLER] beim Schreiben von symbols.csv: {e!r}")
+        finally:
+            reactor.stop()
 
     client.setConnectedCallback(on_connected)
     client.setDisconnectedCallback(on_disconnected)
