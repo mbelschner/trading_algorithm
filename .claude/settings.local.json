@@ -38,7 +38,23 @@
       "PowerShell(git -C $repo add \"r/multi_backtest_runner/strategies/silver_asia_breakout_v4_vectorized.R\")",
       "PowerShell(git -C $repo add \"r/multi_backtest_runner/tests/verify_equivalence.R\" \".gitignore\")",
       "PowerShell(Select-String -Path \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\symbols.csv\" -Pattern \"Brent|XBRENT|OilBrent|OIL\" | Where-Object { $_.Line -notmatch \"_SB|_SBE\" } | Select-Object -ExpandProperty Line | Select-Object -First 10)",
-      "PowerShell(Set-Location \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\"; $outDir = \"price_data\\\\ctrader_data\"; if \\(-not \\(Test-Path $outDir\\)\\) { New-Item -ItemType Directory -Path $outDir | Out-Null }; Get-ChildItem $outDir)"
+      "PowerShell(Set-Location \"c:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\"; $outDir = \"price_data\\\\ctrader_data\"; if \\(-not \\(Test-Path $outDir\\)\\) { New-Item -ItemType Directory -Path $outDir | Out-Null }; Get-ChildItem $outDir)",
+      "PowerShell(& \"C:\\\\Program Files\\\\R\\\\R-4.5.2\\\\bin\\\\Rscript.exe\" r/multi_backtest_runner/tests/smoke_test_sl_tp.R 2>&1)",
+      "PowerShell(python --version)",
+      "PowerShell(python -c \"import numpy, pandas, numba; print\\('numpy', numpy.__version__\\); print\\('pandas', pandas.__version__\\); print\\('numba', numba.__version__\\)\")",
+      "PowerShell(python -c \"import numpy, pandas; print\\('numpy', numpy.__version__\\); print\\('pandas', pandas.__version__\\)\")",
+      "PowerShell(pip install numba --dry-run 2>&1)",
+      "PowerShell(pip install numba -q)",
+      "PowerShell(python -c \"import pandas as pd; df = pd.read_csv\\('price_data/GOLD_MINUTE_5.csv'\\); print\\(df.columns.tolist\\(\\)\\); print\\(df.head\\(2\\).to_string\\(\\)\\)\")",
+      "PowerShell(python -c $script)",
+      "PowerShell(python \"C:\\\\Users\\\\maxib\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-maxib-OneDrive-Dokumente-trading-algorithm\\\\d5849973-73ff-4e9d-9089-f278a20d95a6\\\\scratchpad\\\\smoke_test.py\" 2>&1)",
+      "PowerShell(python \"C:\\\\Users\\\\maxib\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-maxib-OneDrive-Dokumente-trading-algorithm\\\\d5849973-73ff-4e9d-9089-f278a20d95a6\\\\scratchpad\\\\smoke_test.py\")",
+      "PowerShell(python \"C:\\\\Users\\\\maxib\\\\OneDrive\\\\Dokumente\\\\trading_algorithm\\\\multi_backtest_runner\\\\pyrunner\\\\pyrunner\\\\runner.py\")",
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile runner.py)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('runner.py',encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(git show *)",
+      "Read(//tmp/**)"
     ]
   }
 }

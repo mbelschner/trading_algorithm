@@ -1,3 +1,110 @@
+# =============================================================================
+# _fsm_barriers.R  —  Gemeinsamer SL/TP/Overnight-Applikator
+# =============================================================================
+# Wandelt einen Wunsch-Positionsvektor `sig` (-1/0/+1) in eine ausführbare
+# Position um, indem SL/TP/Overnight als ECHTE Zustandsmaschine überlagert
+# werden — sequentiell, nicht als vektorisierter Second-Pass.
+#
+# Behebt die zwei Bugs des entry_bar/LOCF-Ansatzes:
+#   1. Position lebt nach einem Stop nicht wieder auf (Zombie-Re-Entry).
+#   2. Barrieren werden bei jedem Entry FRISCH gesetzt (keine stale LOCF-Levels).
+#
+# Policy:
+#   - Overnight (UTC-Tageswechsel): Position glattstellen.
+#       overnight_lockout = FALSE (Default): nächster Tag darf sofort wieder
+#         einsteigen, wenn das Rohsignal noch aktiv ist (für MR sinnvoll).
+#       overnight_lockout = TRUE: gesperrt bis das Rohsignal die Richtung
+#         verlässt (für Breakout-Strategien mit LOCF-Halten, kein Carry).
+#   - SL/TP-Hit: glattstellen + Lockout der gestoppten Richtung, bis das
+#       Rohsignal sie verlässt -> verhindert sofortiges Wieder-Ausstoppen
+#       am selben Level.
+#   - SL hat Vorrang vor TP bei gleichzeitigem Intrabar-Treffer (konservativ).
+#
+# Diese Funktion ist in jeder Strategie-Datei eingebettet (guarded), sodass
+# die Dateien plugin-eigenständig bleiben. Bei Mehrfach-Source wird sie nur
+# einmal definiert.
+# =============================================================================
+
+if (!exists(".apply_sl_tp_fsm")) {
+  .apply_sl_tp_fsm <- function(sig, High, Low, Close, atr_vec, new_day,
+                               sl_atr_mult, tp_atr_mult,
+                               allow_reversal = TRUE,
+                               overnight_lockout = FALSE) {
+    n      <- length(sig)
+    pos    <- integer(n)
+    sl_out <- rep(NA_real_, n)
+    tp_out <- rep(NA_real_, n)
+
+    state    <- 0L
+    sl_level <- NA_real_
+    tp_level <- NA_real_
+    locked   <- 0L   # Richtung, die nach Stop/TP/Overnight gesperrt ist
+
+    for (i in seq_len(n)) {
+      s  <- sig[i]; if (is.na(s)) s <- 0L
+      a  <- atr_vec[i]
+      px <- Close[i]
+
+      # 1. Overnight-Glattstellung
+      if (new_day[i] && state != 0L) {
+        if (overnight_lockout) locked <- state
+        state <- 0L; sl_level <- NA_real_; tp_level <- NA_real_
+      }
+
+      # 2. SL/TP-Check (SL Vorrang)
+      if (state == 1L) {
+        if (!is.na(sl_level) && Low[i] <= sl_level) {
+          locked <- 1L; state <- 0L; sl_level <- NA_real_; tp_level <- NA_real_
+        } else if (!is.na(tp_level) && High[i] >= tp_level) {
+          locked <- 1L; state <- 0L; sl_level <- NA_real_; tp_level <- NA_real_
+        }
+      } else if (state == -1L) {
+        if (!is.na(sl_level) && High[i] >= sl_level) {
+          locked <- -1L; state <- 0L; sl_level <- NA_real_; tp_level <- NA_real_
+        } else if (!is.na(tp_level) && Low[i] <= tp_level) {
+          locked <- -1L; state <- 0L; sl_level <- NA_real_; tp_level <- NA_real_
+        }
+      }
+
+      # 3. Lockout aufheben, sobald das Rohsignal die Richtung verlässt
+      if (locked != 0L && s != locked) locked <- 0L
+
+      # 4. Entry / Exit / Reversal anhand des Rohsignals
+      if (state == 0L) {
+        if (s != 0L && s != locked && !is.na(a)) {
+          state <- s
+          if (state == 1L) {
+            sl_level <- px - sl_atr_mult * a; tp_level <- px + tp_atr_mult * a
+          } else {
+            sl_level <- px + sl_atr_mult * a; tp_level <- px - tp_atr_mult * a
+          }
+        }
+      } else {
+        if (s == 0L) {
+          state <- 0L; sl_level <- NA_real_; tp_level <- NA_real_
+        } else if (s != state) {
+          if (allow_reversal && !is.na(a)) {
+            state <- s
+            if (state == 1L) {
+              sl_level <- px - sl_atr_mult * a; tp_level <- px + tp_atr_mult * a
+            } else {
+              sl_level <- px + sl_atr_mult * a; tp_level <- px - tp_atr_mult * a
+            }
+          } else {
+            state <- 0L; sl_level <- NA_real_; tp_level <- NA_real_
+          }
+        }
+      }
+
+      pos[i] <- state
+      if (state != 0L) { sl_out[i] <- sl_level; tp_out[i] <- tp_level }
+    }
+
+    list(Position = pos, SL = sl_out, TP = tp_out)
+  }
+}
+
+
 # Tokyo Gap & Range – J225 Intraday (5min)
 #
 # Regime-Switch basierend auf Gap-Groesse bei Session-Open:
@@ -22,19 +129,25 @@ PARAM_GRID <- list(
   or_candles      = c(3L, 4L),
   gap_atr_mult    = c(1.0, 1.5),
   atr_n           = c(14L),
-  session_start_h = c(1L),   # UTC Winter (JST = UTC+9, Tokyo Open 00:00 UTC)
-  session_end_h   = c(7L),   # UTC Winter
-  last_entry_h    = c(6L),   # Kein neuer Entry nach 06:00 UTC
-  adx_filter      = c(TRUE)  # ORB nur wenn ADX > 20
+  session_start_h = c(1L),
+  session_end_h   = c(7L),
+  last_entry_h    = c(6L),
+  adx_filter      = c(TRUE),
+  atr_period      = c(10L, 14L),
+  sl_atr_mult     = c(1.5, 2.0, 2.5),
+  tp_atr_mult     = c(2.0, 3.0, 4.0)
 )
 
 generate_signals <- function(df,
                               or_candles = 3L, gap_atr_mult = 1.5, atr_n = 14L,
                               session_start_h = 1L, session_end_h = 7L,
-                              last_entry_h = 6L, adx_filter = TRUE) {
+                              last_entry_h = 6L, adx_filter = TRUE,
+                              atr_period = 14L, sl_atr_mult = 1.5, tp_atr_mult = 2.0) {
   if (!"Timestamp" %in% names(df)) {
     out <- data.table::copy(df)
-    out[, Position := 0]
+    out[, Position := 0L]
+    out[, SL := NA_real_]
+    out[, TP := NA_real_]
     warning("Tokyo_Gap_Range benoetigt Timestamp-Spalte. Position = 0.")
     return(out)
   }
@@ -64,8 +177,8 @@ generate_signals <- function(df,
   or_count  <- 0L
   or_done   <- FALSE
   prev_close <- NA_real_
-  regime    <- ""   # "ORB" oder "FADE"
-  gap_dir   <- 0L   # +1 Gap-up, -1 Gap-down
+  regime    <- ""
+  gap_dir   <- 0L
 
   for (i in 2:n) {
     # Session-Ende: Force-Close und Reset
@@ -131,6 +244,36 @@ generate_signals <- function(df,
     pos[i] <- state
   }
 
-  out[, Position := pos]
+  out[, Position := as.integer(pos)]
+
+  # ── SL / TP / Overnight via FSM-Barrier-Applikator ────────────────────────
+  atr_vec <- TTR::ATR(
+    HLC    = cbind(out$High, out$Low, out$Close),
+    n      = atr_period,
+    maType = "EMA"
+  )[, "atr"]
+
+  day_utc <- as.integer(format(out$Timestamp, "%d", tz = "UTC"))
+  new_day <- c(FALSE, day_utc[-1L] != day_utc[-length(day_utc)])
+
+  sig <- as.integer(out$Position)
+  sig[is.na(atr_vec)] <- 0L
+
+  res <- .apply_sl_tp_fsm(
+    sig         = sig,
+    High        = out$High,
+    Low         = out$Low,
+    Close       = out$Close,
+    atr_vec     = atr_vec,
+    new_day     = new_day,
+    sl_atr_mult = sl_atr_mult,
+    tp_atr_mult = tp_atr_mult,
+    allow_reversal    = TRUE,
+    overnight_lockout = FALSE
+  )
+
+  out[, Position := res$Position]
+  out[, SL       := res$SL]
+  out[, TP       := res$TP]
   out
 }

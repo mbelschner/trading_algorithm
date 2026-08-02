@@ -9,10 +9,7 @@
 #   5) check_survivor_trades()-> Trade-Liste (full) + Konsistenz-Check vs .strat_returns
 #
 # VORAUSSETZUNG — EINMALIGE MINI-AENDERUNG im Runner:
-#   Ersetze ganz unten in backtest_runner_realistic.R den Auto-Run-Block
-#     if (!interactive() || identical(environmentName(topenv(parent.frame())),
-#                                     "R_GlobalEnv")) { backtest_results <- main() }
-#   durch:
+#   Ersetze ganz unten in backtest_runner_realistic.R den Auto-Run-Block durch:
 #     if (isTRUE(getOption("BTR_AUTORUN", FALSE))) { backtest_results <- main() }
 #   -> dann startet das Sourcen KEINEN Backtest mehr; dieses Script steuert alles.
 #
@@ -22,7 +19,7 @@
 # -----------------------------------------------------------------------------
 # 0) Quellen laden  (Pfade ggf. anpassen)
 # -----------------------------------------------------------------------------
-options(BTR_AUTORUN = FALSE)   # Sicherheitsnetz, falls Edit oben vergessen wurde
+options(BTR_AUTORUN = FALSE)   # Sicherheitsnetz, falls Edit im Runner vergessen wurde
 
 .here <- function(...) file.path(getwd(), ...)
 
@@ -31,21 +28,61 @@ source(.here("r", "multi_backtest_runner", "mcpt_dsr_module.R"))
 source(.here("r", "multi_backtest_runner", "trade_export_glue.R"))
 
 
+# =============================================================================
+# >>> FILTER-AUSWAHL (Survivor-Definition) — HIER STEUERN <<<
+# -----------------------------------------------------------------------------
+# ACTIVE_FILTERS bestimmt, WELCHE Filter darueber entscheiden, ob eine
+# Konfiguration als Survivor gilt (PASSED_ALL == TRUE).
+#
+#   - ALLE Filter F1-F7 werden im Runner IMMER berechnet und in jeder
+#     Ergebniszeile ausgegeben (Diagnose), egal ob aktiv oder nicht.
+#   - Nur die hier gelisteten Filter gehen in PASSED_ALL ein.
+#   - Leerer Vektor c() -> PASSED_ALL ist fuer alle Zeilen TRUE (Rohscan).
+#
+# Verfuegbare Filter-IDs:
+#   "F1" = OS MaxDD        > -15%
+#   "F2" = OS ProfitFactor > 1.2
+#   "F3" = OS Sortino      > 1.0
+#   "F4" = OS Calmar       > 0.5
+#   "F5" = IS ProfitFactor > 1.0
+#   "F6" = OS WinRate in (0.30, 0.85)
+#   "F7" = All-Years-Profitable (jedes volle Jahr > 0; volles Jahr = Bars >= min_year_bars)
+#
+# Beispiele:
+#   ACTIVE_FILTERS <- c("F1","F2","F3","F4","F5","F6","F7")  # streng (Default)
+#   ACTIVE_FILTERS <- c("F2","F7")                            # nur PF + All-Years
+#   ACTIVE_FILTERS <- c("F7")                                 # nur All-Years
+#   ACTIVE_FILTERS <- c()                                     # kein Filter (Rohscan)
+# =============================================================================
+ACTIVE_FILTERS <- c("F1", "F2", "F5", "F6")
+# =============================================================================
+
+
 # -----------------------------------------------------------------------------
 # 1) Backtest -> data.table (ohne Excel)
 # -----------------------------------------------------------------------------
-# strategies  : character vector von Strategie-Stems (ohne .R), z.B.
-#               c("rsi_mean_reversion", "bollinger_zscore_mean_reversion")
-#               NULL = alle .R-Dateien in STRATEGIES_DIR
-# instruments : character vector von CSV-Dateinamen, z.B.
-#               c("GOLD_MINUTE_5.csv", "EURUSD_MINUTE_5.csv")
-#               NULL = alle .csv in PRICE_DATA_DIR
-# ...         : weitere CONFIG-Ueberschreibungen als named args, z.B.
-#               use_all_years_filter=TRUE, execution="close"
-run_backtest <- function(strategies = NULL, instruments = NULL, cfg = CONFIG, ...) {
+# strategies     : character vector von Strategie-Stems (ohne .R), z.B.
+#                  c("rsi_mean_reversion", "bollinger_zscore_mean_reversion")
+#                  NULL = alle .R-Dateien in STRATEGIES_DIR
+# instruments    : character vector von CSV-Dateinamen, z.B.
+#                  c("GOLD_MINUTE_5.csv", "EURUSD_MINUTE_5.csv")
+#                  NULL = alle .csv in PRICE_DATA_DIR
+# active_filters : Survivor-Filterset (siehe ACTIVE_FILTERS oben). Ueberschreibt
+#                  die Runner-CONFIG. Pro Aufruf einzeln ueberschreibbar.
+# ...            : weitere CONFIG-Ueberschreibungen als named args, z.B.
+#                  execution="close", min_year_bars=1500L
+run_backtest <- function(strategies = NULL, instruments = NULL,
+                         active_filters = ACTIVE_FILTERS, cfg = CONFIG, ...) {
   cfg$export_excel <- FALSE
   if (!is.null(strategies))  cfg$strategies  <- strategies
   if (!is.null(instruments)) cfg$instruments <- instruments
+  # active_filters IMMER setzen (auch leer): c()/character(0) -> Rohscan.
+  # missing() unterscheidet "nicht uebergeben" von "bewusst leer".
+  if (!missing(active_filters)) {
+    cfg$active_filters <- if (is.null(active_filters)) character(0) else active_filters
+  } else if (!is.null(active_filters)) {
+    cfg$active_filters <- active_filters
+  }
   dots <- list(...)
   for (nm in names(dots)) cfg[[nm]] <- dots[[nm]]
   main(cfg)
@@ -61,7 +98,8 @@ show_table <- function(results_dt, n = 30, only_passed = FALSE) {
   if ("OS_Sharpe" %in% names(dt)) data.table::setorder(dt, -OS_Sharpe)
   cols <- intersect(c("Strategy", "Instrument", "Params",
                       "OS_Sharpe", "OS_ProfitFactor", "OS_WinRate",
-                      "OS_Trades", "OS_MaxDD", "Worst_Year_Ret", "PASSED_ALL"),
+                      "OS_Trades", "OS_MaxDD", "Worst_Year_Ret",
+                      "Active_Filters", "PASSED_ALL"),
                     names(dt))
   print(head(dt[, ..cols], n))
   invisible(dt[, ..cols])
@@ -222,10 +260,14 @@ check_survivor_trades <- function(survivors, cfg = CONFIG, segment = "full") {
 # -----------------------------------------------------------------------------
 # 6) Komplett-Durchlauf in einem Aufruf
 # -----------------------------------------------------------------------------
+# active_filters wird hier explizit durchgereicht -> die Pipeline ist die
+# alleinige Steuerstelle fuer die Survivor-Definition.
 pipeline <- function(cfg = CONFIG, n_perm = 500, max_survivors = 10,
-                     show_n = 30) {
+                     show_n = 30, active_filters = ACTIVE_FILTERS) {
   message("=== 1) Backtest ===")
-  results <- run_backtest(cfg)
+  message(sprintf("    Aktive Filter (Survivor): %s",
+                  if (length(active_filters) > 0) paste(active_filters, collapse = ", ") else "KEINE (Rohscan)"))
+  results <- run_backtest(active_filters = active_filters, cfg = cfg)
   
   message("\n=== 2) Tabelle (Top nach OS_Sharpe) ===")
   show_table(results, n = show_n)
@@ -234,7 +276,7 @@ pipeline <- function(cfg = CONFIG, n_perm = 500, max_survivors = 10,
   survivors <- prepare_survivors(results, max_n = max_survivors)
   if (nrow(survivors) == 0) {
     message("Keine Survivors -> Pipeline endet hier. ",
-            "Tipp: F1-F7 in apply_filters lockern oder Param-Grid erweitern.")
+            "Tipp: ACTIVE_FILTERS (oben) lockern oder Param-Grid erweitern.")
     return(invisible(list(results = results, survivors = survivors)))
   }
   
@@ -256,25 +298,39 @@ pipeline <- function(cfg = CONFIG, n_perm = 500, max_survivors = 10,
 # =============================================================================
 # >>> STEP-BY-STEP (manuell ausfuehren, nicht beim Sourcen) <<<
 # =============================================================================
-# # Alles auf einmal:
+# # Alles auf einmal (nutzt ACTIVE_FILTERS von oben):
 # pl <- pipeline(n_perm = 500, max_survivors = 10)
 #
+# # Filterset NUR fuer diesen Lauf abweichend (ohne ACTIVE_FILTERS oben zu aendern):
+# pl <- pipeline(n_perm = 500, active_filters = c("F2","F7"))
+#
 # # ODER einzeln, zum Iterieren:
+
+message(paste0("Backtest started ", Sys.time(), sep = " "))
+
+future::plan(future::sequential)
 results   <- run_backtest(
-  strategies = c( "bollinger_zscore_mean_reversion", "rsi_mean_reversion", "sma_crossover", "donchian_crossover"),
-  instruments = NULL)                       
+  strategies  = NULL,
+  instruments = c("GOLD_MINUTE_5.csv", "SILVER_MINUTE_5.csv"),
+  active_filters = ACTIVE_FILTERS)          # 1)  <- Filter kommen von oben
+
+message(paste0("Backtest ended ", Sys.time(), sep = " "))
 
 write.csv(results, file.path(OUTPUT_DIR, paste0("runner_results", Sys.Date(), ".csv")))
 
-show_table(results, n = 40)                 
+show_table(results, n = 40)                 # 2)
 
-show_table(results, only_passed = TRUE)    
+show_table(results, only_passed = TRUE)     # nur Survivors
 
 survivors <- prepare_survivors(results, max_n = 8)   # 3)
 
-val       <- run_validation(survivors, results, n_perm = 1000)  
+val       <- run_validation(survivors, results, n_perm = 1000)  # 4)
 
-trd       <- check_survivor_trades(survivors)        
+trd       <- check_survivor_trades(survivors)        # 5)
+
+# Filterset ad-hoc fuer einen einzelnen Scan ueberschreiben:
+# results <- run_backtest(strategies = c("keltner_squeeze_breakout"),
+#                         active_filters = c("F7"))   # nur All-Years
 
 # Eine konkrete Strategie gezielt pruefen (ohne den ganzen Scan):
 # export_trades_runner("rsi_mean_reversion", "OIL_BRENT_MINUTE_15.csv",

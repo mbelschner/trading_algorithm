@@ -42,7 +42,7 @@ IS_SPLIT <- 0.70
 # Round-Trip = 2x dieser Wert; ein Flip +1->-1 kostet volle 2 Sides.
 # =============================================================================
 
-#spreads für capital.com, Wochenende
+#spreads fuer capital.com, Wochenende
 
 SPREAD_BP <- c(
   USDJPY    = 2.79,
@@ -96,9 +96,34 @@ SPREAD_BP <- as.list(SPREAD_BP)
 # =============================================================================
 # >>> HIER EINSTELLEN <<<
 # =============================================================================
+#
+# FILTER-AUSWAHL (Survivor-Definition):
+#   `active_filters` bestimmt, WELCHE Filter darueber entscheiden, ob eine
+#   Konfiguration als Survivor gilt (PASSED_ALL == TRUE).
+#
+#   - ALLE Filter F1-F7 werden IMMER berechnet und in jeder Ergebniszeile
+#     ausgegeben (zur Diagnose), egal ob aktiv oder nicht.
+#   - Nur die in `active_filters` gelisteten Filter gehen in PASSED_ALL ein.
+#   - Leerer Vektor c() -> PASSED_ALL ist fuer alle Zeilen TRUE (kein Filter).
+#
+#   Verfuegbare Filter-IDs:
+#     "F1" = OS MaxDD       > -15%
+#     "F2" = OS ProfitFactor > 1.2
+#     "F3" = OS Sortino     > 1.0
+#     "F4" = OS Calmar      > 0.5
+#     "F5" = IS ProfitFactor > 1.0
+#     "F6" = OS WinRate in (0.30, 0.85)
+#     "F7" = All-Years-Profitable (jedes volle Jahr > 0; volles Jahr = Bars >= min_year_bars)
+#
+#   Beispiele:
+#     active_filters = c("F1","F2","F3","F4","F5","F6","F7")  # streng (Default)
+#     active_filters = c("F2","F7")                            # nur PF + All-Years
+#     active_filters = c("F7")                                 # nur All-Years
+#     active_filters = c()                                     # kein Filter (Rohscan)
+# =============================================================================
 CONFIG <- list(
   instruments = NULL,    # NULL = alle .csv in price_data/ ansonsten schreiben wie: GOLD_MINUTE_5.csv
-  strategies  = c("rsi_mean_reversion", "bollinger_zscore_mean_reversion"),
+  strategies  = NULL,
   workers     = NULL,
   
   # --- Kostenmodell ---
@@ -109,15 +134,18 @@ CONFIG <- list(
   # --- Ausfuehrung ---
   execution = "next_open",   # "next_open" (realistisch) oder "close" (alt)
   
-  # --- All-Years-Filter ---
-  use_all_years_filter = FALSE,  # FALSE = F7 wird ignoriert (immer TRUE), Breakdown trotzdem ausgegeben
-  min_year_bars = 2000L,        # Jahre mit weniger Bars gelten als Teiljahr -> ignoriert
+  # --- Filter-Auswahl (Survivor-Definition) ---
+  active_filters = c("F1", "F2", "F3", "F4", "F5", "F6", "F7"),  # <-- HIER EIN-/AUSSCHALTEN
+  min_year_bars  = 2000L,    # Jahre mit weniger Bars = Teiljahr -> bei F7 ignoriert
   
   use_cache    = TRUE,
   export_excel = TRUE,
   output       = NULL
 )
 # =============================================================================
+
+# Gueltige Filter-IDs (Validierung gegen Tippfehler in active_filters)
+ALL_FILTER_IDS <- c("F1", "F2", "F3", "F4", "F5", "F6", "F7")
 
 
 # -----------------------------------------------------------------------------
@@ -224,8 +252,6 @@ compute_metrics <- function(df, bars_per_year, cost_bps = 0, execution = "next_o
   sharpe <- if (sd_r > 0) (mean_r / sd_r) * sqrt(bars_per_year) else 0
   
   # --- Sortino: nur Downside-Deviation im Nenner ---
-  # Downside relativ zu 0 (kein Mindest-Return-Target). Quadratischer Mittelwert
-  # der negativen Returns; Upside-Vol wird NICHT bestraft.
   downside <- strat_ret[strat_ret < 0]
   dd_dev <- if (length(downside) > 0) sqrt(mean(downside^2)) else 0
   sortino <- if (dd_dev > 0) (mean_r / dd_dev) * sqrt(bars_per_year) else 0
@@ -261,7 +287,7 @@ compute_metrics <- function(df, bars_per_year, cost_bps = 0, execution = "next_o
 }
 
 
-# Jahres-Returns auf dem GESAMT-Sample (fuer All-Years-Filter)
+# Jahres-Returns auf dem GESAMT-Sample (fuer All-Years-Filter + Breakdown)
 compute_yearly <- function(df, cost_bps, execution) {
   sr <- .strat_returns(df, cost_bps, execution)
   yr <- as.integer(format(df$Timestamp, "%Y"))
@@ -272,9 +298,28 @@ compute_yearly <- function(df, cost_bps, execution) {
 
 
 # -----------------------------------------------------------------------------
-# Filter (F7 = All-Years-Profitable, optional via use_f7)
+# Filter
+#
+# ALLE Filter F1-F7 werden IMMER berechnet (Diagnose in jeder Zeile).
+# PASSED_ALL (Survivor) ergibt sich NUR aus den in `active_filters` gelisteten.
+#
+# F7 — All-Years-Profitable:
+#   - years_ok = TRUE  nur wenn: (a) mindestens 1 volles Jahr vorhanden UND
+#                                 (b) alle vollen Jahre ret > 0
+#   - "volles Jahr" = Jahres-Bars >= min_year_bars (Standard: 2000)
+#   - isTRUE() + length()-Guard (in run_chunk) verhindert all(logical(0)) == TRUE
+#
+# Mapping ID -> Spaltenname (fuer active_filters):
+#   F1 -> F1_OS_MaxDD_above_neg15
+#   F2 -> F2_OS_PF_gt_1.2
+#   F3 -> F3_OS_Sortino_gt_1.0
+#   F4 -> F4_OS_Calmar_gt_0.5
+#   F5 -> F5_IS_PF_gt_1.0
+#   F6 -> F6_OS_WinRate_band
+#   F7 -> F7_AllYearsProfitable
 # -----------------------------------------------------------------------------
-apply_filters <- function(is_m, os_m, years_all_positive, use_f7 = TRUE) {
+apply_filters <- function(is_m, os_m, years_all_positive,
+                          active_filters = c("F1","F2","F3","F4","F5","F6","F7")) {
   os_pf_ok <- is.finite(os_m$profit_factor) && os_m$profit_factor > 1.2 ||
     is.infinite(os_m$profit_factor)
   is_pf_ok <- is.finite(is_m$profit_factor) && is_m$profit_factor > 1.0 ||
@@ -282,19 +327,34 @@ apply_filters <- function(is_m, os_m, years_all_positive, use_f7 = TRUE) {
   calmar_ok <- is.finite(os_m$calmar) && os_m$calmar > 0.5 ||
     is.infinite(os_m$calmar)
   
+  # Immer ALLE Filter berechnen (deskriptiv) ------------------------------------
   f <- list(
     F1_OS_MaxDD_above_neg15 = os_m$max_dd  > -0.15,
     F2_OS_PF_gt_1.2         = os_pf_ok,
     F3_OS_Sortino_gt_1.0    = os_m$sortino > 1.0,
     F4_OS_Calmar_gt_0.5     = calmar_ok,
     F5_IS_PF_gt_1.0         = is_pf_ok,
-    F6_OS_WinRate_band      = os_m$win_rate > 0.45 && os_m$win_rate < 0.85,
-    F7_AllYearsProfitable   = if (use_f7) isTRUE(years_all_positive) else TRUE
+    F6_OS_WinRate_band      = os_m$win_rate > 0.3 && os_m$win_rate < 0.85,
+    F7_AllYearsProfitable   = isTRUE(years_all_positive)
   )
-  f$PASSED_ALL <- all(unlist(f))
+  
+  # ID -> Spaltenname-Map
+  id_to_col <- c(
+    F1 = "F1_OS_MaxDD_above_neg15",
+    F2 = "F2_OS_PF_gt_1.2",
+    F3 = "F3_OS_Sortino_gt_1.0",
+    F4 = "F4_OS_Calmar_gt_0.5",
+    F5 = "F5_IS_PF_gt_1.0",
+    F6 = "F6_OS_WinRate_band",
+    F7 = "F7_AllYearsProfitable"
+  )
+  
+  # PASSED_ALL NUR aus den aktiven Filtern ableiten -----------------------------
+  active_cols <- id_to_col[intersect(active_filters, names(id_to_col))]
+  f$Active_Filters <- if (length(active_cols) > 0) paste(names(active_cols), collapse = ",") else "NONE"
+  f$PASSED_ALL <- if (length(active_cols) == 0) TRUE else all(unlist(f[active_cols]))
   f
 }
-
 
 
 # -----------------------------------------------------------------------------
@@ -321,14 +381,14 @@ build_result_row <- function(strategy_name, instrument, symbol, params, bpy,
       IS_ProfitFactor = if (is.finite(is_m$profit_factor)) round(is_m$profit_factor, 3) else NA_real_,
       IS_Trades       = is_m$num_trades,
       # --- OS (Filter-relevant + deskriptiv) ---
-      OS_Sharpe       = round(os_m$sharpe, 3),          # nur noch deskriptiv
-      OS_Sortino      = round(os_m$sortino, 3),         # Filter F3
-      OS_Calmar       = if (is.finite(os_m$calmar)) round(os_m$calmar, 3) else NA_real_,  # Filter F4
+      OS_Sharpe       = round(os_m$sharpe, 3),
+      OS_Sortino      = round(os_m$sortino, 3),
+      OS_Calmar       = if (is.finite(os_m$calmar)) round(os_m$calmar, 3) else NA_real_,
       OS_CAGR         = round(os_m$cagr, 4),
-      OS_MaxDD        = round(os_m$max_dd, 4),          # Filter F1
+      OS_MaxDD        = round(os_m$max_dd, 4),
       OS_TotalReturn  = round(os_m$total_return, 4),
-      OS_WinRate      = round(os_m$win_rate, 4),        # Filter F6
-      OS_ProfitFactor = if (is.finite(os_m$profit_factor)) round(os_m$profit_factor, 3) else NA_real_,  # Filter F2
+      OS_WinRate      = round(os_m$win_rate, 4),
+      OS_ProfitFactor = if (is.finite(os_m$profit_factor)) round(os_m$profit_factor, 3) else NA_real_,
       OS_Trades       = os_m$num_trades,
       OS_Exposure     = round(os_m$exposure, 3),
       Worst_Year_Ret  = worst_year,
@@ -368,10 +428,15 @@ run_chunk <- function(chunk) {
       os_m <- compute_metrics(sig_os, bpy, chunk$cost_bps, chunk$execution)
       
       yearly  <- compute_yearly(sig_full, chunk$cost_bps, chunk$execution)
-      counted <- yearly[bars >= chunk$min_year_bars]
-      years_ok <- nrow(counted) > 0 && all(counted$ret > 0)
       
-      filt <- apply_filters(is_m, os_m, years_ok, use_f7 = chunk$use_all_years_filter)
+      # F7-Datenbasis: years_ok wird IMMER real berechnet (Diagnose-Spalte),
+      # ob F7 den Survivor-Status gated, entscheidet active_filters.
+      #   Stufe 1: Nur volle Jahre (Bars >= min_year_bars)
+      #   Stufe 2: length()-Guard verhindert all(logical(0)) == TRUE (R-Falle!)
+      counted  <- yearly[bars >= chunk$min_year_bars]
+      years_ok <- nrow(counted) > 0 && length(counted$ret) > 0 && all(counted$ret > 0)
+      
+      filt <- apply_filters(is_m, os_m, years_ok, active_filters = chunk$active_filters)
       build_result_row(chunk$strategy_name, chunk$instrument, chunk$symbol, params,
                        bpy, n_is, n_os, is_m, os_m, filt,
                        chunk$cost_bps, chunk$execution, yearly)
@@ -432,6 +497,16 @@ write_excel <- function(results_dt, output_path) {
 main <- function(cfg = CONFIG) {
   workers <- if (is.null(cfg$workers)) max(1L, parallel::detectCores() - 1L) else cfg$workers
   
+  # active_filters validieren (Tippfehler abfangen) ----------------------------
+  af <- cfg$active_filters
+  if (is.null(af)) af <- character(0)
+  bad <- setdiff(af, ALL_FILTER_IDS)
+  if (length(bad) > 0) {
+    stop(sprintf("Ungueltige Filter-ID(s) in active_filters: %s | erlaubt: %s",
+                 paste(bad, collapse = ", "), paste(ALL_FILTER_IDS, collapse = ", ")))
+  }
+  cfg$active_filters <- intersect(ALL_FILTER_IDS, af)  # in kanonische Reihenfolge bringen
+  
   strategies <- load_strategies(cfg$strategies)
   if (length(strategies) == 0) { message("Keine Strategien gefunden."); return(invisible()) }
   message("Geladene Strategien: ", paste(names(strategies), collapse = ", "))
@@ -441,8 +516,11 @@ main <- function(cfg = CONFIG) {
   files <- files[file.exists(files)]
   if (length(files) == 0) { message("Keine CSVs in ", PRICE_DATA_DIR); return(invisible()) }
   message("Instrumente: ", paste(basename(files), collapse = ", "))
-  message(sprintf("Execution: %s  |  Spread-Map: %s", cfg$execution,
+  message(sprintf("Execution: %s  |  Spread-Map: %s",
+                  cfg$execution,
                   if (isTRUE(cfg$use_spread_map)) "AN" else paste0("AUS (", cfg$cost_bps, " bp)")))
+  message(sprintf("Aktive Filter (Survivor): %s",
+                  if (length(cfg$active_filters) > 0) paste(cfg$active_filters, collapse = ", ") else "KEINE (Rohscan)"))
   
   # Cache vorwaermen (verhindert konkurrierende Schreibzugriffe der Worker)
   if (isTRUE(cfg$use_cache)) {
@@ -468,7 +546,7 @@ main <- function(cfg = CONFIG) {
         param_combos = grid_combos,
         cost_bps = cb, execution = cfg$execution,
         min_year_bars = cfg$min_year_bars, use_cache = isTRUE(cfg$use_cache),
-        use_all_years_filter = isTRUE(cfg$use_all_years_filter)
+        active_filters = cfg$active_filters
       )
     }
   }
