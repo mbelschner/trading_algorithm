@@ -54,7 +54,18 @@
       "Bash(python -m py_compile runner.py)",
       "Bash(python -c \"import ast; ast.parse\\(open\\('runner.py',encoding='utf-8'\\).read\\(\\)\\)\")",
       "Bash(git show *)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(python -)",
+      "Bash(python \"C:/Users/maxib/AppData/Local/Temp/claude/c--Users-maxib-OneDrive-Dokumente-trading-algorithm/cf2b6833-681f-4edf-b048-3709ad575098/scratchpad/verify_ctrader_ports.py\")",
+      "Bash(python \"C:/Users/maxib/AppData/Local/Temp/claude/c--Users-maxib-OneDrive-Dokumente-trading-algorithm/a751a109-f5ec-40b1-9b75-d19ae6d2baf3/scratchpad/repro.py\")",
+      "Bash(python \"C:/Users/maxib/AppData/Local/Temp/claude/c--Users-maxib-OneDrive-Dokumente-trading-algorithm/a751a109-f5ec-40b1-9b75-d19ae6d2baf3/scratchpad/repro2.py\")",
+      "Bash(python runner.py)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(python multi_backtest_runner/pyrunner/pyrunner/runner.py)",
+      "Bash(python verify_ports.py)",
+      "Bash(tasklist //FI \"IMAGENAME eq python.exe\" //FO CSV)",
+      "Bash(ls \"C:/Users/maxib/.claude/projects/c--Users-maxib-OneDrive-Dokumente-trading-algorithm/memory/\" 2>/dev/null && echo \"--- MEMORY.md ---\" && cat \"C:/Users/maxib/.claude/projects/c--Users-maxib-OneDrive-Dokumente-trading-algorithm/memory/MEMORY.md\" 2>/dev/null || echo \"\\(empty or missing\\)\")",
+      "Read(//c/Users/maxib/.claude/projects/c--Users-maxib-OneDrive-Dokumente-trading-algorithm/memory/**)"
     ]
   }
 }

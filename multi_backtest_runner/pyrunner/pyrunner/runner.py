@@ -12,6 +12,15 @@ warnings.filterwarnings('ignore')
 # Konfiguration
 # ---------------------------------------------------------------------------
 IS_SPLIT = 0.70
+# Zweiter, frueherer OS-Block: Fold 1 testet [FOLD1_SPLIT, IS_SPLIT),
+# Fold 2 (= das bisherige OS) testet [IS_SPLIT, Ende]. Anchored Walk-Forward,
+# d.h. die bestehenden IS_*/OS_*-Spalten behalten exakt ihre alte Bedeutung.
+FOLD1_SPLIT = 0.55
+MIN_FOLD_TRADES = 10        # unter dieser Trade-Zahl ist ein Fold nicht aussagekraeftig
+
+# Random-Search statt Vollenumeration, sobald ein Grid die Kappe reisst.
+GRID_SEED = 42
+MAX_COMBOS_PER_STRATEGY = 500
 
 SPREAD_BP = {   # Pepperstone bp/Side
     "USDJPY":1.4,"AUDJPY":5.7,"EURNZD":2.93,"OIL_BRENT":2.34,
@@ -65,9 +74,32 @@ def strat_returns(position: np.ndarray, df: pd.DataFrame,
     else:
         rets    = np.concatenate([[np.nan], np.diff(np.log(df['Close'].values))])
         pos_eff = np.concatenate([[0], pos[:-1]])      # shift 1
+
+    # Der Versatz laeuft ueber den INDEX, nicht ueber die Uhrzeit. Endet eine
+    # Session frueher (Feiertag, Freitag, Datenluecke), greift er ueber die
+    # Luecke hinweg in die Vorsession zurueck und traegt die Position ueber
+    # Mitternacht bzw. den Rollover — genau das, was die Session verhindern
+    # soll. Deshalb wird auch die EFFEKTIVE Position auf die Session maskiert.
+    sys.path.insert(0, str(Path(__file__).parent))
+    from indicators import session_mask
+    pos_eff = np.where(session_mask(df['Timestamp'].values), pos_eff, 0.0)
+
     sr = pos_eff * rets
-    cost = np.abs(np.concatenate([[np.nan], np.diff(pos)])) * (cost_bps/10000)
-    cost = np.where(np.isnan(cost), 0, cost)
+
+    # FIX: Kosten wurden an der SIGNAL-Aenderung (diff(pos)) verbucht, die
+    # Position wird aber erst 1-2 Bars spaeter wirksam (pos_eff). Dadurch fiel
+    # die Entry-Haelfte jedes Round-Trips in die Flat-Gruppe, die compute_metrics
+    # per pos_eff bildet und wegwirft -> ProfitFactor/WinRate (F2/F6) waren zu gut.
+    # Jetzt: Kosten an der EFFEKTIVEN Positionsaenderung. Der schliessende Teil
+    # wird auf den letzten Bar des Trades gelegt, der oeffnende auf den ersten
+    # Bar des neuen Trades, damit beide Haelften im selben Trade landen.
+    prev      = np.concatenate([[0.0], pos_eff[:-1]])
+    overlap   = np.where(np.sign(prev) == np.sign(pos_eff),
+                         np.minimum(np.abs(prev), np.abs(pos_eff)), 0.0)
+    open_amt  = np.abs(pos_eff) - overlap    # bei Bar k eroeffnet
+    close_amt = np.abs(prev)    - overlap    # bei Bar k geschlossen -> Bar k-1
+    turnover  = open_amt + np.concatenate([close_amt[1:], [0.0]])
+    cost = turnover * (cost_bps/10000)
     return sr - cost, pos_eff
 
 
@@ -119,9 +151,11 @@ def compute_yearly(position, df, cost_bps, execution):
 # ---------------------------------------------------------------------------
 FILTER_ID2COL = {'F1':'F1_OS_MaxDD_above_neg15','F2':'F2_OS_PF_gt_1.2',
                   'F3':'F3_OS_Sortino_gt_1.0','F4':'F4_OS_Calmar_gt_0.5',
-                  'F5':'F5_IS_PF_gt_1.0','F6':'F6_OS_WinRate_band','F7':'F7_AllYearsProfitable'}
+                  'F5':'F5_IS_PF_gt_1.0','F6':'F6_OS_WinRate_band','F7':'F7_AllYearsProfitable',
+                  'F8':'F8_BothFoldsPositive'}
 
-def apply_filters(is_m, os_m, yearly_os, active_filters, min_year_bars):
+def apply_filters(is_m, os_m, yearly_os, active_filters, min_year_bars,
+                  os1_m=None, min_fold_trades=MIN_FOLD_TRADES):
     def pf_ok(m,thr): return (np.isfinite(m['profit_factor']) and m['profit_factor']>thr) or np.isinf(m['profit_factor'])
     # FIX: yearly nur auf OS-Daten (yearly_os statt yearly_full).
     # Verhindert, dass gute IS-Jahre schlechte OS-Jahre in F7 überdecken.
@@ -136,6 +170,13 @@ def apply_filters(is_m, os_m, yearly_os, active_filters, min_year_bars):
         # FIX: Untergrenze 0.30 → 0.45 (Design-Spec war 45–85%)
         'F6_OS_WinRate_band':       0.45<os_m['win_rate']<0.85,
         'F7_AllYearsProfitable':    years_ok,
+        # Selektion laeuft ueber zehntausende Kombinationen gegen EIN OS-Fenster.
+        # F8 verlangt, dass auch der fruehere Fold traegt, und schliesst dabei
+        # Konfigurationen mit zu wenigen Trades aus (sonst ist "positiv" Rauschen).
+        'F8_BothFoldsPositive':     (os1_m is not None
+                                     and os1_m['num_trades'] >= min_fold_trades
+                                     and os1_m['total_return'] > 0
+                                     and os_m['total_return'] > 0),
     }
     active_cols = [FILTER_ID2COL[x] for x in active_filters if x in FILTER_ID2COL]
     f['Active_Filters'] = ','.join(active_filters) if active_filters else 'NONE'
@@ -146,10 +187,32 @@ def apply_filters(is_m, os_m, yearly_os, active_filters, min_year_bars):
 # ---------------------------------------------------------------------------
 # Expand param grid
 # ---------------------------------------------------------------------------
-def expand_grid(grid: dict):
+def expand_grid(grid: dict, max_combos: int = None, seed: int = None):
+    """Kartesisches Produkt; oberhalb von max_combos ein deterministisches
+    Random-Search-Sample statt Vollenumeration.
+
+    max_combos=0 (oder None + MAX_COMBOS_PER_STRATEGY=0) erzwingt die volle
+    Enumeration — noetig fuer Regressionslaeufe gegen alte Result-CSVs.
+
+    Wichtig: run_backtest ruft die Funktion zweimal auf (Groessen-Schaetzung und
+    Task-Bau). Beide Aufrufe muessen dieselbe Liste liefern, sonst weicht die
+    ETA von der tatsaechlich abgearbeiteten Arbeit ab -> fester Seed.
+    """
     keys = list(grid.keys())
     vals = list(grid.values())
-    return [dict(zip(keys,v)) for v in itertools.product(*vals)]
+    total = 1
+    for v in vals: total *= len(v)
+    cap = MAX_COMBOS_PER_STRATEGY if max_combos is None else max_combos
+    if not cap or total <= cap:
+        return [dict(zip(keys,v)) for v in itertools.product(*vals)]
+    rng = np.random.default_rng(GRID_SEED if seed is None else seed)
+    seen = set(); out = []
+    while len(out) < cap:
+        idx = tuple(int(rng.integers(0, len(v))) for v in vals)
+        if idx in seen: continue
+        seen.add(idx)
+        out.append({keys[j]: vals[j][idx[j]] for j in range(len(keys))})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +227,7 @@ def run_task(task):
     df = load_csv(csv_path)
     bpy = infer_bars_per_year(df)
     n = len(df); split = int(n*IS_SPLIT)
+    split1 = int(n*FOLD1_SPLIT)          # Fold-1-Grenze, OS1 = [split1, split)
     stem = Path(csv_path).stem
 
     fn, _ = STRATEGIES[strat_name]
@@ -177,11 +241,15 @@ def run_task(task):
 
             is_m = compute_metrics(pos_is, df_is, bpy, cost_bps, execution)
             os_m = compute_metrics(pos_os, df_os, bpy, cost_bps, execution)
+            # Fold 1: frueheres, disjunktes OS-Fenster [split1, split)
+            os1_m = compute_metrics(pos_full[split1:split], df.iloc[split1:split],
+                                    bpy, cost_bps, execution)
             # FIX: F7 yearly NUR auf OS-Daten, nicht auf IS+OS zusammen.
             # IS-Jahre könnten schlechte OS-Jahre in F7 verstecken.
             yearly_os = compute_yearly(pos_os, df_os, cost_bps, execution)
             yearly_full = compute_yearly(pos_full, df, cost_bps, execution)
-            filters = apply_filters(is_m, os_m, yearly_os, active_filters, min_year_bars)
+            filters = apply_filters(is_m, os_m, yearly_os, active_filters,
+                                    min_year_bars, os1_m=os1_m)
 
             yearly_str = ' '.join(f"{int(r.year)}:{r.ret*100:+.1f}%"
                                   for _,r in yearly_full.iterrows())
@@ -207,6 +275,11 @@ def run_task(task):
                         'OS_ProfitFactor':round(os_m['profit_factor'],3) if np.isfinite(os_m['profit_factor']) else None,
                         'OS_Trades':os_m['num_trades'],
                         'OS_Exposure':round(os_m['exposure'],3),
+                        'OS1_Sharpe':round(os1_m['sharpe'],3),
+                        'OS1_ProfitFactor':round(os1_m['profit_factor'],3) if np.isfinite(os1_m['profit_factor']) else None,
+                        'OS1_TotalReturn':round(os1_m['total_return'],4),
+                        'OS1_MaxDD':round(os1_m['max_dd'],4),
+                        'OS1_Trades':os1_m['num_trades'],
                         'Worst_Year_Ret':round(worst,4),
                         'Yearly_Breakdown':yearly_str,
                         'Error':None})
@@ -337,7 +410,11 @@ class _ProgressTracker:
 # ---------------------------------------------------------------------------
 def run_backtest(strategies=None, instruments=None, data_dir='/mnt/project',
                  active_filters=None, execution='next_open',
-                 workers=None, chunk_size=128, verbose=True):
+                 workers=None, chunk_size=128, verbose=True,
+                 max_combos=None, cost_bps=None):
+    """max_combos: Kappe pro Strategie (0 = volle Enumeration, None = Default).
+    cost_bps: ueberschreibt SPREAD_BP fuer ALLE Instrumente — fuer den
+    Kosten-Sensitivitaetslauf, ohne die Tabelle anzufassen."""
     if active_filters is None: active_filters = ACTIVE_FILTERS
     sys.path.insert(0, str(Path(__file__).parent))
     from strategies import STRATEGIES
@@ -350,21 +427,30 @@ def run_backtest(strategies=None, instruments=None, data_dir='/mnt/project',
     csvs = [str(p) for p in csvs if Path(p).exists()]
 
     # Kombinations-Zahl melden (pro Strategie, für Kalibrierung/Gewichtung)
-    strat_row_counts = {s: len(expand_grid(STRATEGIES[s][1]))*len(csvs) for s in strat_names}
+    strat_row_counts = {s: len(expand_grid(STRATEGIES[s][1], max_combos))*len(csvs)
+                        for s in strat_names}
     total = sum(strat_row_counts.values())
     if verbose:
+        cap = MAX_COMBOS_PER_STRATEGY if max_combos is None else max_combos
         print(f"Strategien: {len(strat_names)}  |  Instrumente: {len(csvs)}  |  Runs: {total:,}")
+        print(f"Grid-Kappe: {cap or 'aus (volle Enumeration)'}  |  Seed: {GRID_SEED}")
         print(f"Aktive Filter: {active_filters}  |  Execution: {execution}")
+        for s in strat_names:
+            full = 1
+            for v in STRATEGIES[s][1].values(): full *= len(v)
+            n_used = strat_row_counts[s]//max(1,len(csvs))
+            mark = '  (sampled)' if n_used < full else ''
+            print(f"    {s:<28} {n_used:>5} / {full:>7} Kombis{mark}")
 
     # Tasks: (strat, csv, params_block, cost, exec, filters, min_year_bars)
     tasks = []
     for sname in strat_names:
         _, grid = STRATEGIES[sname]
-        all_params = expand_grid(grid)
+        all_params = expand_grid(grid, max_combos)
         blocks = [all_params[i:i+chunk_size] for i in range(0,len(all_params),chunk_size)]
         for csv_path in csvs:
             sym = instrument_symbol(Path(csv_path).stem)
-            cost = SPREAD_BP.get(sym, SPREAD_DEFAULT)
+            cost = SPREAD_BP.get(sym, SPREAD_DEFAULT) if cost_bps is None else cost_bps
             for blk in blocks:
                 tasks.append((sname, csv_path, blk, cost, execution,
                                active_filters, MIN_YEAR_BARS))
@@ -413,28 +499,33 @@ if __name__ == '__main__':
     strategies = [
         "RSI_MeanReversion",
         "Bollinger_ZScore_MR",
-        #"ATRDistance_MeanReversion",
-        #"CCI_MeanReversion",
-        #"CMO_VHF_STC",
+        "ATRDistance_MeanReversion",
+        "CCI_MeanReversion",
+        "CMO_VHF_STC",
         "Donchian_Breakout",
         "Ichimoku_7_20_60",
-        #"VWAP_MeanReversion",
-        #"SMA_Crossover",
-        #"Supertrend_ATR",
+        "VWAP_MeanReversion",
+        "SMA_Crossover",
+        "Supertrend_ATR",
         "Keltner_Squeeze_Breakout",
-        #"MACD_Trend_Momentum",
+        "MACD_Trend_Momentum",
         "Session_ORB",
         "Trend_RSI_Pullback",
-        #"GapFade",
         "Tokyo_Gap_Range",
-        #"SilverAsia_BreakoutV4",
+        "SilverAsia_BreakoutV4",
+        # --- neue MR-Kandidaten aus der Copper-Analyse ---
+        "Session_ZScore_MR",
+        "VWAP_Band_MR",
+        "OU_HalfLife_MR",
+        "Overnight_Reversal",
+        "RSI_Extreme_MR",
     ]
 
     # Alle Instrumente/Timeframes — Zeile auskommentieren (#) um sie vom Test auszuschliessen
     # (MINUTE_15 ist standardmaessig auskommentiert, da urspruenglich nur MINUTE_5 lief)
     instruments = [
-        "AUDUSD_MINUTE_5.csv",
-        "AUDUSD_MINUTE_15.csv",
+        #"AUDUSD_MINUTE_5.csv",
+        #"AUDUSD_MINUTE_15.csv",
         #"COPPER_MINUTE_5.csv",
         "COPPER_MINUTE_15.csv",
         #"DE40_MINUTE_5.csv",
@@ -445,26 +536,32 @@ if __name__ == '__main__':
         #"EURJPY_MINUTE_15.csv",
         #"EURUSD_MINUTE_5.csv",
         #"EURUSD_MINUTE_15.csv",
-        "GOLD_MINUTE_5.csv",
-        "GOLD_MINUTE_15.csv",
-        "OIL_BRENT_MINUTE_5.csv",
-        "OIL_BRENT_MINUTE_15.csv",
+        #"GOLD_MINUTE_5.csv",
+        #"GOLD_MINUTE_15.csv",
+        #"OIL_BRENT_MINUTE_5.csv",
+        #"OIL_BRENT_MINUTE_15.csv",
         #"SILVER_MINUTE_5.csv",
         #"SILVER_MINUTE_15.csv",
         #"US500_MINUTE_5.csv",
         #"US500_MINUTE_15.csv",
-        "USDCAD_MINUTE_5.csv",
-        "USDCAD_MINUTE_15.csv",
-        "USDJPY_MINUTE_5.csv",
-        "USDJPY_MINUTE_15.csv",
+        #"USDCAD_MINUTE_5.csv",
+        #"USDCAD_MINUTE_15.csv",
+        #"USDJPY_MINUTE_5.csv",
+        #"USDJPY_MINUTE_15.csv",
     ]
 
+    # F8 (beide OS-Folds positiv) ist gegen die Selektionsverzerrung gerichtet:
+    # ohne ihn wird ueber zehntausende Kombinationen gegen EIN OS-Fenster
+    # selektiert. cost_bps=None nutzt SPREAD_BP (Copper 1.57bp); fuer den
+    # Sensitivitaetslauf denselben Aufruf mit cost_bps=3.5 wiederholen.
     results = run_backtest(
         strategies=strategies,
         instruments=instruments,
         data_dir=str(data_dir),
-        active_filters=['F1','F2', 'F4', 'F5','F6'],
-        workers=12
+        active_filters=['F1','F2','F4','F5','F6','F8'],
+        workers=12,
+        max_combos=None,      # None = MAX_COMBOS_PER_STRATEGY, 0 = volle Enumeration
+        cost_bps=None,
     )
     out = Path(__file__).parent.parent / "results" / f"runner_results_py_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv"
     out.parent.mkdir(parents=True, exist_ok=True)

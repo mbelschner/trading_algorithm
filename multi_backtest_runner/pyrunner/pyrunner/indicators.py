@@ -4,6 +4,7 @@ Alle Funktionen geben np.ndarray zurück, NaN-gepadded wie TTR.
 """
 import numpy as np
 import pandas as pd
+from numba import njit
 
 
 def ema(x: np.ndarray, period: int) -> np.ndarray:
@@ -172,6 +173,109 @@ def new_day_mask(timestamps: np.ndarray) -> np.ndarray:
     days = timestamps.astype('datetime64[D]').astype(np.int32)
     nd = np.concatenate([[False], days[1:] != days[:-1]])
     return nd
+
+
+def _wallclock(timestamps: np.ndarray, tz: str = None) -> pd.DatetimeIndex:
+    """UTC-Zeitstempel als naive Wanduhr-Zeit in tz. tz=None -> UTC (unveraendert).
+
+    Ueber tz laeuft die Sommerzeit-Umstellung automatisch mit: der Markt pausiert
+    konstant um 23:00 lokal, in UTC wandert diese Grenze zwischen 21:00 (MESZ)
+    und 22:00 (MEZ). Feste UTC-Stunden waeren daher ein halbes Jahr lang falsch.
+    """
+    idx = pd.DatetimeIndex(np.asarray(timestamps, dtype='datetime64[ns]'), tz='UTC')
+    if tz:
+        idx = idx.tz_convert(tz)
+    return idx.tz_localize(None)
+
+
+def local_hours(timestamps: np.ndarray, tz: str = None) -> np.ndarray:
+    """Stunde des Tages (0-23) in der Zielzeitzone."""
+    return _wallclock(timestamps, tz).hour.values.astype(np.int32)
+
+
+# ---------------------------------------------------------------------------
+# Handelssession (global) — hier definiert, damit runner.py und strategies.py
+# dieselbe Wahrheit benutzen, ohne sich gegenseitig zu importieren.
+# Markt: 00:00-23:00 lokal, Pause 23:00-00:00 = Rollover (17:00 New York),
+# an dem die Uebernacht-Finanzierung anfaellt.
+#   Start 01:00 — eine Stunde nach Handelsbeginn, kein Handel um Mitternacht
+#   Ende  22:00 — eine Stunde vor dem Rollover, daher keine Finanzierungskosten
+# ---------------------------------------------------------------------------
+SESSION_TZ      = 'Europe/Berlin'
+SESSION_START_H = 1
+SESSION_END_H   = 22
+
+_SESSION_CACHE = {}
+
+def session_mask(timestamps: np.ndarray) -> np.ndarray:
+    """True, wenn der Bar in der Handelssession liegt.
+
+    Gecacht: die Zeitzonen-Umrechnung ist zu teuer, um sie fuer jede der
+    tausenden Parameter-Kombinationen und jedes Metrik-Fenster zu wiederholen.
+    """
+    ts = np.asarray(timestamps, dtype='datetime64[ns]')
+    if len(ts) == 0:
+        return np.zeros(0, bool)
+    key = (ts[0].view('int64').item(), ts[-1].view('int64').item(), len(ts))
+    m = _SESSION_CACHE.get(key)
+    if m is None:
+        lh = local_hours(ts, SESSION_TZ)
+        m = (lh >= SESSION_START_H) & (lh < SESSION_END_H)
+        if len(_SESSION_CACHE) > 64:
+            _SESSION_CACHE.clear()
+        _SESSION_CACHE[key] = m
+    return m
+
+
+def session_break_mask(timestamps: np.ndarray, break_hour: int = 0,
+                       tz: str = None) -> np.ndarray:
+    """Erster Bar einer neuen Handels-Session.
+
+    break_hour verschiebt die Session-Grenze weg von Mitternacht, tz gibt an,
+    in welcher Zeitzone diese Stunde gemeint ist.
+    break_hour=0, tz=None ist bit-identisch zu new_day_mask.
+    """
+    idx = _wallclock(timestamps, tz)
+    if break_hour:
+        idx = idx - pd.Timedelta(hours=int(break_hour))
+    days = idx.normalize().values.astype('datetime64[D]').astype(np.int64)
+    return np.concatenate([[False], days[1:] != days[:-1]])
+
+
+@njit(cache=True)
+def rolling_halflife(x: np.ndarray, fit_len: int, hl_cap: float) -> np.ndarray:
+    """Rollende OU-Halbwertszeit aus einem AR(1)-Fit von dx_t auf x_{t-1}.
+
+    Ornstein-Uhlenbeck diskret: dx_t = a + lambda*x_{t-1} + eps.
+    Mean Reversion verlangt -1 < lambda < 0; half_life = -ln(2)/ln(1+lambda).
+    NaN, solange das Fenster unvollstaendig ist oder der Fit nicht mean-reverting
+    ist (trendend / Random Walk) — genau die Regimes, die eine MR-Strategie
+    meiden soll. Laufende Summen -> O(n) statt O(n*fit_len).
+    """
+    n = len(x)
+    out = np.full(n, np.nan)
+    if fit_len < 8 or n < fit_len + 2:
+        return out
+    sx = 0.0; sy = 0.0; sxx = 0.0; sxy = 0.0; m = 0
+    ln2 = np.log(2.0)
+    for i in range(1, n):
+        xi = x[i-1]; yi = x[i] - x[i-1]
+        sx += xi; sy += yi; sxx += xi*xi; sxy += xi*yi; m += 1
+        if m > fit_len:
+            j = i - fit_len                      # aeltestes Paar entfernen
+            xo = x[j-1]; yo = x[j] - x[j-1]
+            sx -= xo; sy -= yo; sxx -= xo*xo; sxy -= xo*yo; m -= 1
+        if m < fit_len:
+            continue
+        den = m*sxx - sx*sx
+        if den == 0.0:
+            continue
+        lam = (m*sxy - sx*sy) / den
+        if lam >= 0.0 or lam <= -1.0:
+            continue
+        hl = -ln2 / np.log(1.0 + lam)
+        out[i] = hl if hl < hl_cap else hl_cap
+    return out
 
 
 def rsi_divergence(high, low, rsi_v, lookback):
