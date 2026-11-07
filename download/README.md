@@ -71,7 +71,7 @@ symbolId (für API-Calls) und die "digits" (Preis-Nachkommastellen).
 DATEN HERUNTERLADEN (beliebig oft wiederholbar)
 ================================================================
 
-   python 03_download.py --symbol XBRUSD --tf M5 \
+   python 03_download.py --symbol SpotBrent --tf M5 \
        --from 2024-01-22 --to 2026-03-31 \
        --out OIL_BRENT_M5.csv
 
@@ -85,7 +85,7 @@ Parameter:
 Beispiele für deine 13 Instrumente (passe Symbol-Namen nach
 symbols.csv an – die Namen variieren je Broker!):
 
-   python 03_download.py --symbol XBRUSD  --tf M5 --from 2024-01-22 --to 2026-03-31 --out OIL_BRENT_M5.csv
+   python 03_download.py --symbol SpotBrent  --tf M5 --from 2024-01-22 --to 2026-03-31 --out OIL_BRENT_M5.csv
    python 03_download.py --symbol XAGUSD  --tf M5 --from 2024-01-22 --to 2026-03-31 --out SILVER_M5.csv
    python 03_download.py --symbol XAUUSD  --tf M5 --from 2024-01-22 --to 2026-03-31 --out GOLD_M5.csv
    python 03_download.py --symbol STOXX50 --tf M5 --from 2024-01-22 --to 2026-03-31 --out EU50_M5.csv
@@ -100,7 +100,7 @@ symbols.csv an – die Namen variieren je Broker!):
    python 03_download.py --symbol EURNZD  --tf M5 --from 2024-01-22 --to 2026-03-31 --out EURNZD_M5.csv
 
 Auch zusätzlich Brent 15min für Ichimoku-Strategie:
-   python 03_download.py --symbol XBRUSD  --tf M15 --from 2024-01-22 --to 2026-03-31 --out OIL_BRENT_M15.csv
+   python 03_download.py --symbol SpotBrent  --tf M15 --from 2024-01-22 --to 2026-03-31 --out OIL_BRENT_M15.csv
 
 
 ================================================================
