@@ -1,76 +1,29 @@
-# Secrets / credentials
-python/.env
-ctrader_setup/ctrader_spotware_app_credentials.txt
+# --- Zugangsdaten: niemals committen -------------------------------------
+tokens.json
+**/tokens.json
+config.py
+download/config.py
+*.env
+.env
+api_data.txt
+*credentials*.txt
 
-# Large data files - excluded from GitHub
-price_data/
-databento_data/
-feature_cache/
-backtest_results/pnl_feature_selection/cache/
-export/GOLD_MINUTE_15.csv
-labelled_data/*.csv
+# --- Daten und Ergebnisse (lokal, zu gross fuer Git) ----------------------
+data/*
+!data/.gitkeep
+results/
+*.xlsx
 
-# cTrader API – sensitive files
-ctrader_setup/config.py
-ctrader_setup/tokens.json
-ctrader_setup/.venv/
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+venv/
 
-# R specific files
+# --- Editor / Claude Code lokal --------------------------------------------
+.claude/settings.local.json
+.vscode/
+.idea/
+.Rproj.user/
 .Rhistory
 .RData
-.Rproj.user/
-
-# Session Data files
-.RData
-.RDataTmp
-
-# User-specific files
-.Ruserdata
-
-# Example code in package build process
-*-Ex.R
-
-# Output files from R CMD build
-/*.tar.gz
-
-# Output files from R CMD check
-/*.Rcheck/
-
-# RStudio files
-.Rproj.user/
-.Rproj.user*
-
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
-
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
-
-# knitr and R markdown default cache directories
-*_cache/
-/cache/
-
-# Backtest runner RDS cache
-r/multi_backtest_runner/cache/
-
-# Temporary files created by R markdown
-*.utf8.md
-*.knit.md
-
-# R Environment Variables
-.Renviron
-
-# pkgdown site
-docs/
-
-# translation temp files
-po/*~
-
-# RStudio Connect folder
-rsconnect/
-
-# Python image generation
-python/image_generation_flux.py
-python/pics/
-pics/

@@ -1,0 +1,5 @@
+# Backtest (pyrunner)
+numpy
+pandas
+numba
+# Daten-Download ueber die cTrader Open API: siehe download/requirements.txt
