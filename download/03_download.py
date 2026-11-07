@@ -7,9 +7,9 @@ Format:    time,open,high,low,close,volume
 Zeitzone:  UTC
 
 Beispiele:
-   python 03_download.py --symbol XBRUSD --tf M5 --from 2024-01-22 --to 2026-03-31
+   python 03_download.py --symbol SpotBrent --tf M5 --from 2024-01-22 --to 2026-03-31
    python 03_download.py --symbol GER40  --tf M5 --from 2024-01-22 --to 2026-03-31 --out DE40_M5.csv
-   python 03_download.py --symbol XBRUSD --tf M15 --from 2024-01-22 --to 2026-03-31 --out OIL_BRENT_M15.csv
+   python 03_download.py --symbol SpotBrent --tf M15 --from 2024-01-22 --to 2026-03-31 --out OIL_BRENT_M15.csv
 
 Hinweise:
 - M5 über mehrere Jahre wird automatisch in 30-Tage-Chunks geladen
@@ -130,7 +130,7 @@ def decode_bar(bar, digits):
 
 def main():
     ap = argparse.ArgumentParser(description="cTrader Open API – Bars Downloader")
-    ap.add_argument("--symbol", required=True, help="z.B. XBRUSD, GER40, EURUSD")
+    ap.add_argument("--symbol", required=True, help="z.B. SpotBrent, GER40, EURUSD")
     ap.add_argument("--tf",     required=True, choices=list(TIMEFRAMES.keys()),
                     help="Timeframe: M1, M5, M15, M30, H1, H4, D1")
     ap.add_argument("--from",   dest="from_date", required=True, help="YYYY-MM-DD")
